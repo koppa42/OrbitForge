@@ -295,6 +295,10 @@ TEST(Project, CurrentSchemaFixturePreservesInputsRelationshipsAndExactEncoding) 
     const auto project = application::load_project(ORBITFORGE_PROJECT_CURRENT);
     ASSERT_EQ(project.satellites.size(), 2U);
     EXPECT_EQ(project.name, "Schema fixture");
+    EXPECT_TRUE(project.satellites[1].orbit.hpop.srp.boundary_mitigation);
+    EXPECT_EQ(project.satellites[1].orbit.hpop.srp.additional_eclipsing_bodies,
+              (std::vector<core::SrpEclipsingBody>{{core::ThirdBody::mercury, 2440000.125},
+                                                   {core::ThirdBody::venus, 6051800}}));
     EXPECT_EQ(project.satellites[0].orbit.object_id, "satellite-a");
     EXPECT_EQ(project.satellites[0].display_name, "观测卫星 A");
     EXPECT_EQ(project.satellites[0].orbit.initial.position_m,
@@ -303,7 +307,46 @@ TEST(Project, CurrentSchemaFixturePreservesInputsRelationshipsAndExactEncoding) 
     EXPECT_EQ(project.satellites[0].display.line_width, 3.25);
     EXPECT_EQ(project.satellites[1].orbit.propagator, application::OrbitPropagator::mission);
     EXPECT_EQ(project.satellites[1].orbit.hpop.gravity_degree, 0);
+    EXPECT_FALSE(project.satellites[1].orbit.hpop.include_relativistic_accelerations);
+    EXPECT_EQ(project.satellites[1].orbit.hpop.satellite_mass_kg, 1250);
+    EXPECT_EQ(project.satellites[1].orbit.hpop.interpolation.method,
+              core::OrbitInterpolationMethod::hermite);
+    EXPECT_EQ(project.satellites[1].orbit.hpop.interpolation.order, 5);
+    EXPECT_EQ(project.satellites[1].orbit.hpop.interpolation.vop_mu, 4.1e14);
+    EXPECT_TRUE(project.satellites[1].orbit.hpop.report_ephemeris_on_fixed_step);
+    EXPECT_TRUE(project.satellites[1].orbit.hpop.time_regularization);
+    EXPECT_EQ(project.satellites[1].orbit.hpop.regularization_exponent, 1.25);
+    EXPECT_EQ(project.satellites[1].orbit.hpop.steps_per_orbit, 240);
+    EXPECT_EQ(project.satellites[1].orbit.hpop.integrator, core::HpopIntegrator::gauss_jackson);
+    EXPECT_TRUE(project.satellites[1].orbit.hpop.vop);
+    EXPECT_FALSE(project.satellites[1].orbit.hpop.uses_vop());
+    EXPECT_EQ(project.satellites[1].orbit.hpop.correction, core::HpopCorrection::pseudo);
+    EXPECT_TRUE(project.satellites[1].orbit.hpop.include_secular_variations);
+    EXPECT_EQ(project.satellites[1].orbit.hpop.ocean_tides,
+              (core::OceanTideOptions{false, "fixture-ocean", 30, 12}));
+    EXPECT_EQ(project.satellites[1].orbit.hpop.drag_area_m2(), 37.5);
+    EXPECT_EQ(project.satellites[1].orbit.hpop.srp_area_m2(), 37.5);
+    EXPECT_TRUE(project.satellites[1].orbit.hpop.solid_tides.include_time_dependent_terms);
+    EXPECT_FALSE(project.satellites[1].orbit.hpop.srp.enabled);
+    EXPECT_EQ(project.satellites[1].orbit.hpop.srp.cr, 1.25);
+    EXPECT_EQ(project.satellites[1].orbit.hpop.srp.sun_position_method,
+              core::SrpSunPositionMethod::apparent);
+    EXPECT_EQ(project.satellites[1].orbit.hpop.srp.atmospheric_altitude_m, 23000);
+    const auto &drag = project.satellites[1].orbit.hpop.drag;
+    EXPECT_FALSE(drag.enabled);
+    EXPECT_EQ(drag.cd, 2.3);
+    EXPECT_EQ(drag.atmosphere, core::AtmosphereModel::nrlmsise00);
+    EXPECT_EQ(drag.low_altitude_model, core::LowAltitudeDensityModel::nrlmsise00);
+    EXPECT_EQ(drag.blending_range_m, 42000);
+    EXPECT_EQ(drag.f107, 170);
+    EXPECT_EQ(drag.kp, 4.3);
+    EXPECT_TRUE(drag.use_apparent_sun_position);
+    EXPECT_TRUE(drag.use_approximate_altitude);
+    EXPECT_EQ(drag.weather_model, "fixture-weather");
+    EXPECT_EQ(drag.geomagnetic_update, core::GeomagneticUpdate::three_hourly_cubic_spline);
+    EXPECT_EQ(drag.geomagnetic_source, core::GeomagneticSource::kp);
     EXPECT_EQ(project.satellites[1].orbit.hpop.max_step_seconds, 45);
+    EXPECT_EQ(project.satellites[1].orbit.hpop.step_control, core::HpopStepControl::fixed);
     EXPECT_EQ(project.satellites[1].orbit.hpop.minimum_altitude_m, 1000);
     const auto &mission = project.satellites[1].orbit.mission;
     ASSERT_EQ(mission.segments.size(), 3U);
@@ -377,8 +420,8 @@ TEST(Project, DataLocksHaveStableCanonicalOrderAndRejectDuplicateRoles) {
 }
 TEST(Project, RejectsEveryPreviousVersionAndFutureVersionBeforeReadingPayload) {
     const auto bytes = application::encode_project(example());
-    for (std::uint32_t version = 0; version <= 15; ++version) {
-        if (version == 14)
+    for (std::uint32_t version = 0; version <= 41; ++version) {
+        if (version == 40)
             continue;
         SCOPED_TRACE(version);
         auto unsupported = bytes;
@@ -390,7 +433,7 @@ TEST(Project, RejectsEveryPreviousVersionAndFutureVersionBeforeReadingPayload) {
         } catch (const application::ProjectError &error) {
             EXPECT_NE(std::string(error.what()).find("version " + std::to_string(version) + ";"),
                       std::string::npos);
-            EXPECT_NE(std::string(error.what()).find("reads only version 14"), std::string::npos);
+            EXPECT_NE(std::string(error.what()).find("reads only version 40"), std::string::npos);
         }
     }
 }

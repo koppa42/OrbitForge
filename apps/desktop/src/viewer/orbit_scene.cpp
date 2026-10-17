@@ -57,7 +57,7 @@ prepare_orbit_scene(OrbitInput input, application::Session session,
     // Adjacent TAI nanoseconds straddle an impulse: no representable query can
     // interpolate across the velocity discontinuity. Both smooth arcs retain
     // their own endpoint tangents, including for a burn off the display grid.
-    for (const auto epoch : session.discontinuities()) {
+    for (const auto epoch : session.discontinuities(check_cancel)) {
         const auto ns = epoch.tai_nanoseconds();
         if (ns >= first && ns <= last) {
             if (ns > first)

@@ -72,16 +72,9 @@ class SegmentDelegate final : public QStyledItemDelegate {
         painter->setRenderHint(QPainter::Antialiasing);
         const QRect row = option.rect.adjusted(1, 2, -1, -2);
         const bool selected = option.state & QStyle::State_Selected;
-        const bool focused = selected && (option.state & QStyle::State_HasFocus);
-        painter->setPen(focused    ? QColor("#9bd3ee")
-                        : selected ? QColor("#43657d")
-                                   : QColor(Qt::transparent));
-        painter->setBrush(selected                                   ? QColor("#263e50")
-                          : (option.state & QStyle::State_MouseOver) ? QColor("#202f3c")
-                                                                     : QColor(Qt::transparent));
-        painter->drawRoundedRect(row, 7, 7);
-        const auto accent =
-            index.data(impulse_role).toBool() ? QColor("#ddb5cc") : QColor("#9bcde5");
+        const auto accent = index.data(impulse_role).toBool() ? theme::color(theme::sakura)
+                                                              : theme::color(theme::accent);
+        paint_list_row(painter, option, QRectF(row), accent);
         auto number_font = option.font;
         number_font.setFamilies({"Consolas", "Microsoft YaHei UI"});
         painter->setFont(number_font);
@@ -91,9 +84,8 @@ class SegmentDelegate final : public QStyledItemDelegate {
                           QStringLiteral("%1").arg(index.row() + 1, 2, 10, QChar('0')));
         const int x = row.left() + 46, width = std::max(0, row.width() - 58);
         auto font = option.font;
-        font.setWeight(QFont::DemiBold);
         painter->setFont(font);
-        painter->setPen(QColor("#e4eef5"));
+        painter->setPen(theme::color(selected ? theme::accent_bright : theme::text));
         const QFontMetrics title_metrics(font);
         painter->drawText(QRect(x, row.top() + 10, width, title_metrics.height()), Qt::AlignVCenter,
                           title_metrics.elidedText(index.data().toString(), Qt::ElideRight, width));
@@ -104,7 +96,7 @@ class SegmentDelegate final : public QStyledItemDelegate {
         const QFontMetrics metrics(font);
         int y = row.top() + 14 + title_metrics.height();
         for (const int role : {timing_role, detail_role}) {
-            painter->setPen(role == detail_role ? accent : QColor("#9fb6c8"));
+            painter->setPen(role == detail_role ? accent : theme::color(theme::text_muted));
             painter->drawText(
                 QRect(x, y, width, metrics.height()), Qt::AlignVCenter,
                 metrics.elidedText(index.data(role).toString(), Qt::ElideRight, width));
@@ -118,20 +110,24 @@ class MissionEditor final : public QDialog {
     core::MissionPlan plan;
     core::HpopOptions hpop;
     MissionEditor(core::MissionPlan draft, core::HpopOptions options, core::Epoch initial,
-                  core::Epoch scenario_first, core::Epoch scenario_last, QWidget *parent)
+                  core::Epoch scenario_first, core::Epoch scenario_last, QWidget *parent,
+                  const std::vector<runtime::CatalogGravity> &models,
+                  const std::vector<runtime::CatalogEphemeris> &ephemerides,
+                  const std::function<std::vector<runtime::CatalogEphemeris>()> &manage_ephemerides,
+                  EopCatalog *catalog, bool initialize_hpop)
         : QDialog(parent), plan(std::move(draft)), hpop(options), initial_(initial),
           first_(scenario_first), last_(scenario_last) {
         setObjectName("missionEditorDialog");
         setWindowTitle(QStringLiteral("机动规划 · 任务序列"));
         auto *outer = new QVBoxLayout(this);
-        outer->setContentsMargins(24, 22, 24, 20);
-        outer->setSpacing(14);
+        outer->setContentsMargins(theme::space::page);
+        outer->setSpacing(12);
         auto *heading = new QVBoxLayout;
-        heading->setSpacing(5);
+        heading->setSpacing(4);
         auto *title = new QLabel(QStringLiteral("机动规划"));
         title->setObjectName("panelTitle");
         heading->addWidget(title);
-        heading->addWidget(note(QStringLiteral("保存计划后，在卫星属性中应用轨道。")));
+        heading->addWidget(note(QStringLiteral("保存计划后，在卫星轨道页点击“应用”。")));
         outer->addLayout(heading);
 
         auto *model_row = new QHBoxLayout;
@@ -147,13 +143,22 @@ class MissionEditor final : public QDialog {
         settings->setEnabled(model_->currentIndex() == 1);
         model_row->addWidget(settings);
         outer->addLayout(model_row);
-        connect(settings, &QPushButton::clicked, this, [this] { edit_hpop_settings(hpop, this); });
-        connect(model_, &QComboBox::currentIndexChanged, this, [this, settings](int index) {
-            plan.coast_model =
-                index == 0 ? core::MissionCoastModel::two_body : core::MissionCoastModel::hpop;
-            settings->setEnabled(index == 1);
-            refresh_summary();
-        });
+        connect(settings, &QPushButton::clicked, this,
+                [this, models, ephemerides, manage_ephemerides, catalog] {
+                    edit_hpop_settings(hpop, this, models, ephemerides, manage_ephemerides,
+                                       catalog);
+                });
+        connect(model_, &QComboBox::currentIndexChanged, this,
+                [this, settings, initialize_hpop](int index) mutable {
+                    if (index == 1 && initialize_hpop) {
+                        hpop = new_hpop_options();
+                        initialize_hpop = false;
+                    }
+                    plan.coast_model = index == 0 ? core::MissionCoastModel::two_body
+                                                  : core::MissionCoastModel::hpop;
+                    settings->setEnabled(index == 1);
+                    refresh_summary();
+                });
 
         navigation_ = new QTabBar(this);
         navigation_->setObjectName("missionNavigation");
@@ -179,7 +184,7 @@ class MissionEditor final : public QDialog {
         left->addWidget(note(QStringLiteral("T+ 从卫星初始历元起算 · TAI 时长")));
         list_ = new QListWidget;
         list_->setObjectName("missionSegments");
-        list_->setSpacing(5);
+        list_->setSpacing(4);
         list_->setMinimumWidth(0);
         list_->setItemDelegate(new SegmentDelegate(list_));
         list_->setAccessibleName(QStringLiteral("按执行顺序排列的任务段"));
@@ -187,22 +192,24 @@ class MissionEditor final : public QDialog {
         list_->setResizeMode(QListView::Adjust);
         list_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
         left->addWidget(list_, 1);
-        auto *add_row = new QHBoxLayout;
+        // One action row: add commands as labelled buttons, reordering and removal as
+        // icon buttons whose tooltips and accessible names keep the full wording.
+        auto *actions = new QHBoxLayout;
+        actions->setSpacing(6);
         auto *coast = button(QStringLiteral("＋ 滑行"), "missionAddCoast");
         auto *impulse = button(QStringLiteral("＋ 脉冲"), "missionAddImpulse");
-        add_row->addWidget(coast);
-        add_row->addWidget(impulse);
-        left->addLayout(add_row);
-        auto *tools = new QHBoxLayout;
-        up_ = button(QStringLiteral("上移"), "missionMoveUp");
-        down_ = button(QStringLiteral("下移"), "missionMoveDown");
-        remove_ = button(QStringLiteral("删除"), "missionRemove");
+        actions->addWidget(coast);
+        actions->addWidget(impulse);
+        actions->addStretch(1);
+        up_ = icon_button(WorkbenchIcon::chevron_up, QStringLiteral("上移"), "missionMoveUp");
+        down_ = icon_button(WorkbenchIcon::chevron_down, QStringLiteral("下移"), "missionMoveDown");
+        remove_ = icon_button(WorkbenchIcon::remove, QStringLiteral("删除"), "missionRemove");
         up_->setToolTip(QStringLiteral("上移当前段（列表中 Alt+↑）"));
         down_->setToolTip(QStringLiteral("下移当前段（列表中 Alt+↓）"));
         remove_->setToolTip(QStringLiteral("删除当前段及其未完成输入（列表中 Delete）"));
         for (auto *b : {up_, down_, remove_})
-            tools->addWidget(b);
-        left->addLayout(tools);
+            actions->addWidget(b);
+        left->addLayout(actions);
         columns->addWidget(sequence_, 2);
 
         scroll_ = new QScrollArea;
@@ -212,8 +219,8 @@ class MissionEditor final : public QDialog {
         auto *details = new QWidget;
         details->setObjectName("missionParameterFields");
         auto *right = new QVBoxLayout(details);
-        right->setContentsMargins(18, 14, 18, 18);
-        right->setSpacing(16);
+        right->setContentsMargins(theme::space::panel);
+        right->setSpacing(theme::space::sm);
         heading_ = new QLabel;
         heading_->setObjectName("sectionTitle");
         right->addWidget(heading_);
@@ -224,12 +231,14 @@ class MissionEditor final : public QDialog {
             note(QStringLiteral("添加一段滑行，再按点火时刻插入脉冲。\n每段继承上一段的末状态。"));
         empty_->setObjectName("missionEmpty");
         right->addWidget(empty_);
+        right->addSpacing(theme::space::sm);
+        // One row rhythm from the name down to the last Δv component.
         fields_ = new QWidget;
         auto *fields_layout = new QVBoxLayout(fields_);
         fields_layout->setContentsMargins(0, 0, 0, 0);
-        fields_layout->setSpacing(16);
+        fields_layout->setSpacing(theme::space::row);
         auto *form = new QFormLayout;
-        form->setVerticalSpacing(14);
+        form->setVerticalSpacing(theme::space::row);
         form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
         name_ = new QLineEdit;
         name_->setObjectName("missionSegmentName");
@@ -241,7 +250,7 @@ class MissionEditor final : public QDialog {
         auto *coast_page = new QWidget;
         auto *coast_form = new QFormLayout(coast_page);
         coast_form->setContentsMargins(0, 0, 0, 0);
-        coast_form->setVerticalSpacing(14);
+        coast_form->setVerticalSpacing(theme::space::row);
         coast_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
         duration_ = new QuantityEditor(Unit::minute);
         duration_->setObjectName("missionCoastDuration");
@@ -254,7 +263,7 @@ class MissionEditor final : public QDialog {
         auto *impulse_page = new QWidget;
         auto *impulse_form = new QFormLayout(impulse_page);
         impulse_form->setContentsMargins(0, 0, 0, 0);
-        impulse_form->setVerticalSpacing(14);
+        impulse_form->setVerticalSpacing(theme::space::row);
         impulse_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
         frame_ = new QComboBox;
         frame_->setObjectName("missionManeuverFrame");
@@ -283,7 +292,7 @@ class MissionEditor final : public QDialog {
         const int label_width = fontMetrics().horizontalAdvance(QStringLiteral("Δv · 共法向 C"));
         for (auto *f : {form, coast_form, impulse_form}) {
             f->setRowWrapPolicy(QFormLayout::WrapLongRows);
-            f->setHorizontalSpacing(12);
+            f->setHorizontalSpacing(theme::space::md);
             f->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
             for (int row = 0; row < f->rowCount(); ++row)
                 if (auto *label = f->itemAt(row, QFormLayout::LabelRole); label && label->widget())
@@ -301,8 +310,8 @@ class MissionEditor final : public QDialog {
         auto *status = new QFrame;
         status->setObjectName("missionStatus");
         auto *status_layout = new QVBoxLayout(status);
-        status_layout->setContentsMargins(12, 10, 12, 10);
-        status_layout->setSpacing(5);
+        status_layout->setContentsMargins(theme::space::card);
+        status_layout->setSpacing(4);
         summary_ = new QLabel;
         summary_->setObjectName("missionSummary");
         summary_->setWordWrap(true);
@@ -435,6 +444,15 @@ class MissionEditor final : public QDialog {
         auto *b = new QPushButton(text);
         b->setObjectName(id);
         b->setAutoDefault(false);
+        return b;
+    }
+    static QPushButton *icon_button(WorkbenchIcon icon, const QString &text, const char *id) {
+        auto *b = button(QString{}, id);
+        b->setIcon(workbench_icon(icon));
+        b->setIconSize(QSize(15, 15));
+        b->setAccessibleName(text);
+        b->setProperty("iconOnly", true);
+        b->setFixedSize(28, 28);
         return b;
     }
     static QLabel *note(const QString &text) {
@@ -672,8 +690,13 @@ class MissionEditor final : public QDialog {
 };
 } // namespace
 bool edit_mission(core::MissionPlan &plan, core::HpopOptions &hpop, core::Epoch initial,
-                  core::Epoch scenario_first, core::Epoch scenario_last, QWidget *parent) {
-    MissionEditor dialog(plan, hpop, initial, scenario_first, scenario_last, parent);
+                  core::Epoch scenario_first, core::Epoch scenario_last, QWidget *parent,
+                  const std::vector<runtime::CatalogGravity> &models,
+                  const std::vector<runtime::CatalogEphemeris> &ephemerides,
+                  const std::function<std::vector<runtime::CatalogEphemeris>()> &manage_ephemerides,
+                  EopCatalog *catalog, bool initialize_hpop) {
+    MissionEditor dialog(plan, hpop, initial, scenario_first, scenario_last, parent, models,
+                         ephemerides, manage_ephemerides, catalog, initialize_hpop);
     if (dialog.exec() != QDialog::Accepted)
         return false;
     plan = std::move(dialog.plan);

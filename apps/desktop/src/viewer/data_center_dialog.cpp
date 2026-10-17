@@ -1,4 +1,5 @@
 #include "eop_catalog.hpp"
+#include "form_kit.hpp"
 #include "responsive_layout.hpp"
 #include "workbench_spin_box.hpp"
 #include "workbench_style.hpp"
@@ -30,6 +31,32 @@
 
 namespace orbitforge::desktop {
 namespace {
+QString product_name(DataProduct p) {
+    switch (p) {
+    case DataProduct::finals2000a:
+        return QStringLiteral("finals2000A");
+    case DataProduct::c04:
+        return QStringLiteral("C04");
+    case DataProduct::utc:
+        return QStringLiteral("UTC / 闰秒");
+    case DataProduct::egm2008:
+        return QStringLiteral("EGM2008");
+    case DataProduct::egm96:
+        return QStringLiteral("EGM96");
+    case DataProduct::custom_gravity:
+        return QStringLiteral("外部重力场");
+    case DataProduct::fes2014bv1:
+        return QStringLiteral("FES2014bv1 海潮");
+    case DataProduct::custom_ocean_tides:
+        return QStringLiteral("外部海潮模型");
+    case DataProduct::space_weather:
+        return QStringLiteral("空间天气 · CelesTrak");
+    case DataProduct::de440s:
+        return QStringLiteral("DE440s");
+    }
+    return {};
+}
+
 class DataCenterArtwork final : public QWidget {
   public:
     DataCenterArtwork() : artwork_(":/orbitforge/artwork/data-preparation.png") {
@@ -127,12 +154,13 @@ class DataTreeWidget final : public QTreeWidget {
   protected:
     void drawBranches(QPainter *painter, const QRect &rect,
                       const QModelIndex &index) const override {
-        painter->fillRect(rect, QColor("#171e27"));
+        painter->fillRect(rect, theme::color(theme::panel));
         if (!model()->hasChildren(index))
             return;
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing);
-        painter->setPen(QPen(QColor("#a4b1ca"), 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter->setPen(
+            QPen(theme::color(theme::text_muted), 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         const QPointF center(rect.right() - indentation() / 2.0, rect.center().y());
         const auto points = isExpanded(index)
                                 ? QPolygonF{center + QPointF(-3, -2), center + QPointF(0, 1),
@@ -150,41 +178,39 @@ class DataItemDelegate final : public QStyledItemDelegate {
                const QModelIndex &index) const override {
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing);
-        const auto bounds = option.rect.adjusted(2, 3, -2, -3);
+        // A desktop list row: transparent at rest, a soft wash on hover, and the selected row
+        // marked by an accent wash with a leading stripe.
+        const auto bounds = QRectF(option.rect).adjusted(2, 2, -2, -2);
         const bool selected = option.state & QStyle::State_Selected;
-        const bool hover = option.state & QStyle::State_MouseOver;
-        painter->setPen(option.state & QStyle::State_HasFocus ? QColor("#95cdec")
-                                                              : Qt::transparent);
-        painter->setBrush(QColor(selected ? "#294357" : hover ? "#233341" : "#171e27"));
-        painter->drawRoundedRect(bounds, 7, 7);
+        paint_list_row(painter, option, bounds, theme::color(theme::accent));
         const bool child = index.parent().isValid();
         const auto icon = child ? WorkbenchIcon::database
                           : index.data(Qt::UserRole).toInt() == static_cast<int>(DataProduct::utc)
                               ? WorkbenchIcon::clock
                               : WorkbenchIcon::earth;
-        workbench_icon(icon, QColor(selected ? "#b6def3" : "#8e9ebb"))
-            .paint(painter, QRect(bounds.left() + 12, bounds.top() + 12, 18, 18));
-        const auto left = bounds.left() + 40;
-        const auto width = bounds.right() - left - 8;
+        const auto top = static_cast<int>(bounds.top());
+        workbench_icon(icon, theme::color(selected ? theme::accent_bright
+                                          : child  ? theme::text_muted
+                                                   : theme::accent))
+            .paint(painter, QRect(static_cast<int>(bounds.left()) + 12, top + 11, 16, 16));
+        const auto left = static_cast<int>(bounds.left()) + 38;
+        const auto width = static_cast<int>(bounds.right()) - left - 8;
         const auto lines = index.data().toString().split('\n');
         auto title_font = option.font;
-        title_font.setPixelSize(13);
-        title_font.setWeight(QFont::DemiBold);
-        painter->setFont(title_font);
-        painter->setPen(QColor(selected ? "#eff6fa" : "#d0d9eb"));
-        painter->drawText(QRect(left, bounds.top() + 8, width, 22), Qt::AlignVCenter,
-                          painter->fontMetrics().elidedText(lines.value(0), Qt::ElideRight, width));
-        title_font.setPixelSize(11);
+        title_font.setPixelSize(child ? 13 : 12);
         title_font.setWeight(QFont::Normal);
         painter->setFont(title_font);
-        painter->setPen(QColor(index.data(Qt::UserRole + 1).toBool() ? "#e6c68b"
-                               : selected                            ? "#b7d1e3"
-                                                                     : "#a0b6c8"));
-        painter->drawText(QRect(left, bounds.top() + 32, width, 17), Qt::AlignVCenter,
+        painter->setPen(theme::color(selected ? theme::accent_bright
+                                     : child  ? theme::text
+                                              : theme::text_soft));
+        painter->drawText(QRect(left, top + 6, width, 22), Qt::AlignVCenter,
+                          painter->fontMetrics().elidedText(lines.value(0), Qt::ElideRight, width));
+        title_font.setPixelSize(11);
+        painter->setFont(title_font);
+        painter->setPen(theme::color(index.data(Qt::UserRole + 1).toBool() ? theme::warning
+                                                                           : theme::text_muted));
+        painter->drawText(QRect(left, top + 28, width, 17), Qt::AlignVCenter,
                           painter->fontMetrics().elidedText(lines.value(1), Qt::ElideRight, width));
-        painter->setPen(QColor("#a9c0d0"));
-        painter->drawText(QRect(left, bounds.top() + 52, width, 17), Qt::AlignVCenter,
-                          painter->fontMetrics().elidedText(lines.value(2), Qt::ElideRight, width));
         painter->restore();
     }
 };
@@ -198,11 +224,13 @@ class PriorityDelegate final : public QStyledItemDelegate {
         const auto bounds = option.rect.adjusted(1, 4, -1, -4);
         const bool selected = option.state & QStyle::State_Selected;
         const bool hover = option.state & QStyle::State_MouseOver;
-        painter->setPen(QColor(selected ? "#91bed6" : "#3a4b5a"));
-        painter->setBrush(QColor(selected ? "#273f50" : hover ? "#233341" : "#222c38"));
-        painter->drawRoundedRect(bounds, 8, 8);
+        painter->setPen(theme::color(selected ? theme::accent : theme::line));
+        painter->setBrush(theme::color(selected ? theme::accent_wash
+                                       : hover  ? theme::accent_hover
+                                                : theme::panel));
+        painter->drawRoundedRect(bounds, 6, 6);
         painter->setPen(Qt::NoPen);
-        painter->setBrush(QColor("#8e9ebb"));
+        painter->setBrush(theme::color(theme::text_muted));
         for (int x = 0; x < 2; ++x)
             for (int y = 0; y < 3; ++y)
                 painter->drawEllipse(
@@ -211,26 +239,26 @@ class PriorityDelegate final : public QStyledItemDelegate {
         font.setPixelSize(14);
         font.setWeight(QFont::DemiBold);
         painter->setFont(font);
-        painter->setPen(QColor("#aed4e8"));
+        painter->setPen(theme::color(theme::accent));
         painter->drawText(QRect(bounds.left() + 33, bounds.top(), 24, bounds.height()),
                           Qt::AlignCenter, QString::number(index.row() + 1));
         const auto lines = index.data().toString().split('\n');
         const auto left = bounds.left() + 72;
         const auto width = bounds.width() - 96;
-        painter->setPen(QColor("#e7edff"));
+        painter->setPen(theme::color(theme::text));
         painter->drawText(QRect(left, bounds.top() + 12, width, 22), Qt::AlignVCenter,
                           lines.value(0));
         font.setPixelSize(12);
         font.setWeight(QFont::Normal);
         painter->setFont(font);
-        painter->setPen(QColor("#aebeca"));
+        painter->setPen(theme::color(theme::text_muted));
         painter->drawText(QRect(left, bounds.top() + 40, width, 20), Qt::AlignVCenter,
                           painter->fontMetrics().elidedText(lines.value(1), Qt::ElideRight, width));
         painter->restore();
     }
 };
 } // namespace
-void show_data_center(QWidget *parent, EopCatalog &catalog) {
+void show_data_center(QWidget *parent, EopCatalog &catalog, std::optional<DataProduct> initial) {
     QDialog dialog(parent);
     dialog.setObjectName("eopDataDialog");
     dialog.setWindowTitle(QStringLiteral("数据中心"));
@@ -270,7 +298,7 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
     sidebar->setObjectName("dataSidebar");
     sidebar->setFixedWidth(std::clamp(dialog.width() / 4, 220, 258));
     auto *sidebar_layout = new QVBoxLayout(sidebar);
-    sidebar_layout->setContentsMargins(12, 18, 12, 18);
+    sidebar_layout->setContentsMargins(12, 16, 12, 16);
     sidebar_layout->setSpacing(12);
     auto *inventory_caption = new QLabel(QStringLiteral("数据列表"));
     inventory_caption->setObjectName("dataSidebarCaption");
@@ -290,12 +318,30 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
     const auto add_source = [&](DataProduct product, QTreeWidgetItem *parent) {
         auto *item = parent ? new QTreeWidgetItem(parent) : new QTreeWidgetItem(list);
         item->setData(0, Qt::UserRole, static_cast<int>(product));
-        item->setSizeHint(0, QSize(0, 80));
+        item->setSizeHint(0, QSize(0, 62));
         return item;
     };
     auto *finals_node = add_source(DataProduct::finals2000a, eop_node);
     auto *c04_node = add_source(DataProduct::c04, eop_node);
     auto *utc_node = add_source(DataProduct::utc, nullptr);
+    auto *gravity_node =
+        new QTreeWidgetItem(list, {QStringLiteral("地球重力场\n模型文件与计算资源")});
+    gravity_node->setSizeHint(0, QSize(0, 54));
+    auto *egm2008_node = add_source(DataProduct::egm2008, gravity_node);
+    auto *egm96_node = add_source(DataProduct::egm96, gravity_node);
+    auto *custom_node = add_source(DataProduct::custom_gravity, gravity_node);
+    gravity_node->setExpanded(true);
+    auto *ephemeris_node =
+        new QTreeWidgetItem(list, {QStringLiteral("太阳系星历\n第三体引力数据")});
+    ephemeris_node->setSizeHint(0, QSize(0, 54));
+    auto *de440s_node = add_source(DataProduct::de440s, ephemeris_node);
+    auto *weather_node = add_source(DataProduct::space_weather, nullptr);
+    auto *ocean_node = new QTreeWidgetItem(list, {QStringLiteral("海潮模型\n归一化势系数")});
+    ocean_node->setSizeHint(0, QSize(0, 54));
+    auto *fes_node = add_source(DataProduct::fes2014bv1, ocean_node);
+    auto *custom_ocean_node = add_source(DataProduct::custom_ocean_tides, ocean_node);
+    ocean_node->setExpanded(true);
+    ephemeris_node->setExpanded(true);
     eop_node->setExpanded(true);
     list->setCurrentItem(eop_node);
     sidebar_layout->addWidget(list, 1);
@@ -307,8 +353,8 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
     panel->setObjectName("dataDetailPanel");
     panel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
     auto *detail_layout = new QVBoxLayout(panel);
-    detail_layout->setContentsMargins(30, 26, 30, 24);
-    detail_layout->setSpacing(18);
+    detail_layout->setContentsMargins(theme::space::page);
+    detail_layout->setSpacing(16);
     panels->addWidget(panel, 1);
     layout->addLayout(panels, 1);
     auto *title = new QLabel;
@@ -325,6 +371,14 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
     data_description->setObjectName("dataDescription");
     data_description->setWordWrap(true);
     detail_layout->addWidget(data_description);
+    auto *gravity_summary = new QLabel(QStringLiteral(
+        "EGM2008 / EGM96 "
+        "是静态重力场，无固定有效期，默认按需下载。\n\n完整文件保留全部系数；支持 EGM2008 "
+        "完整 2190 × 2159，按文件范围独立选择阶数和次数。外部文件支持静态 ICGEM .gfc 和 STK .grv，"
+        "不支持的时变项会明确报错。"));
+    gravity_summary->setWordWrap(true);
+    gravity_summary->setObjectName("hint");
+    detail_layout->addWidget(gravity_summary);
     auto *priority_scroll = new QScrollArea;
     priority_scroll->setWidgetResizable(true);
     priority_scroll->setFrameShape(QFrame::NoFrame);
@@ -333,7 +387,7 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
     auto *priority_panel = new QWidget;
     priority_scroll->setWidget(priority_panel);
     auto *priority_layout = new QVBoxLayout(priority_panel);
-    priority_layout->setContentsMargins(0, 10, 0, 0);
+    priority_layout->setContentsMargins(0, 12, 0, 0);
     priority_layout->setSpacing(12);
     auto *priority_heading = new QHBoxLayout;
     auto *priority_caption = new QLabel(QStringLiteral("计算优先级"));
@@ -396,8 +450,8 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
         scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         auto *widget = new QWidget;
         auto *page_layout = new QVBoxLayout(widget);
-        page_layout->setContentsMargins(0, 24, 0, 0);
-        page_layout->setSpacing(22);
+        page_layout->setContentsMargins(0, 16, 0, 0);
+        page_layout->setSpacing(24);
         scroll->setWidget(widget);
         pages->addTab(scroll, label);
         return page_layout;
@@ -409,9 +463,9 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
     auto *facts = new QFrame;
     facts->setObjectName("dataFacts");
     auto *form = new QFormLayout(facts);
-    form->setContentsMargins(22, 22, 22, 22);
+    form->setContentsMargins(theme::space::panel);
     form->setHorizontalSpacing(20);
-    form->setVerticalSpacing(18);
+    form->setVerticalSpacing(16);
     form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     form->setRowWrapPolicy(QFormLayout::WrapLongRows);
     form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
@@ -433,7 +487,7 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
     acquired->setToolTip(QStringLiteral("本地时间"));
     checked->setToolTip(QStringLiteral("本地时间"));
     overview_layout->addWidget(facts);
-    responsive_form(form, 520);
+    responsive_form(form, 380);
     auto *note = new QLabel;
     note->setObjectName("dataNote");
     note->setWordWrap(true);
@@ -441,7 +495,7 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
     acquisition->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
     auto *acquisition_layout = new QVBoxLayout(acquisition);
     acquisition_layout->setContentsMargins(0, 0, 0, 0);
-    acquisition_layout->setSpacing(14);
+    acquisition_layout->setSpacing(12);
     auto *actions = new QHBoxLayout;
     actions->setSpacing(10);
     auto *download = new QPushButton;
@@ -458,30 +512,32 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
     file_layout->addWidget(manifest, 0, Qt::AlignLeft);
     actions->addStretch();
     acquisition_layout->addLayout(actions);
-    auto *automatic_row = new QWidget;
-    auto *automatic_layout = new QHBoxLayout(automatic_row);
-    automatic_layout->setContentsMargins(0, 0, 0, 0);
+    auto *planetary_centres = new QPushButton(QStringLiteral("导入行星本体星历…"));
+    planetary_centres->setObjectName("importPlanetaryCentres");
+    planetary_centres->setIcon(workbench_icon(WorkbenchIcon::folder));
+    acquisition_layout->addWidget(planetary_centres, 0, Qt::AlignLeft);
+    // Update and extrapolation settings: two inspector groups, each opened by a switch.
+    settings_layout->setSpacing(0);
+    auto *automatic_row = new FormGroup(QStringLiteral("自动更新"));
+    automatic_row->setProperty("leading", true);
     auto *automatic = new QCheckBox(QStringLiteral("自动下载与更新"));
     automatic->setObjectName("dataAutoUpdate");
     automatic->setChecked(catalog.automatic_updates());
+    make_switch(automatic);
     auto *frequency = new QComboBox;
     frequency->setObjectName("dataUpdateFrequency");
     frequency->setAccessibleName(QStringLiteral("自动检查频率"));
     frequency->addItem(QStringLiteral("每 6 小时"), 6);
     frequency->addItem(QStringLiteral("每 24 小时"), 24);
     frequency->addItem(QStringLiteral("每 7 天"), 168);
-    automatic_layout->addWidget(automatic);
-    automatic_layout->addSpacing(8);
-    automatic_layout->addWidget(frequency);
-    automatic_layout->addStretch();
-    auto *update_title = new QLabel(QStringLiteral("自动更新"));
-    update_title->setObjectName("sectionTitle");
-    settings_layout->addWidget(update_title);
+    frequency->setMaximumWidth(276);
+    automatic_row->form()->addRow(automatic);
+    automatic_row->form()->addRow(QStringLiteral("检查频率"), frequency);
     settings_layout->addWidget(automatic_row);
     auto *schedule = new QLabel;
     schedule->setObjectName("dataUpdateSchedule");
     schedule->setWordWrap(true);
-    settings_layout->addWidget(schedule);
+    automatic_row->form()->addRow(schedule);
     auto *progress = new QProgressBar;
     progress->setObjectName("dataDownloadProgress");
     progress->setTextVisible(false);
@@ -490,16 +546,12 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
     overview_layout->addWidget(acquisition);
     overview_layout->addWidget(note);
     overview_layout->addStretch();
-    auto *policy_title = new QLabel(QStringLiteral("覆盖范围之外"));
-    policy_title->setObjectName("sectionTitle");
-    settings_layout->addSpacing(12);
+    auto *policy_title = new FormGroup(QStringLiteral("覆盖范围之外"));
     settings_layout->addWidget(policy_title);
-    auto *extrapolation = new QWidget;
-    auto *extrapolation_layout = new QVBoxLayout(extrapolation);
-    extrapolation_layout->setContentsMargins(0, 0, 0, 0);
-    extrapolation_layout->setSpacing(14);
+    auto *extrapolation = policy_title->body();
     auto *allow = new QCheckBox(QStringLiteral("允许有限外推"));
     allow->setObjectName("allowEopExtrapolation");
+    make_switch(allow);
     auto *days = new WorkbenchSpinBox<QSpinBox>;
     days->setObjectName("eopExtrapolationDays");
     days->setAccessibleName(QStringLiteral("EOP 前后各允许外推的天数"));
@@ -508,20 +560,13 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
     days->setRange(1, core::max_eop_extrapolation_days);
     days->setValue(3);
     days->setSuffix(QStringLiteral(" 天"));
-    extrapolation_layout->addWidget(allow);
-    auto *limit_row = new QHBoxLayout;
+    days->setMaximumWidth(160);
+    policy_title->form()->addRow(allow);
     auto *limit_caption = new QLabel(QStringLiteral("前后各最多"));
-    limit_caption->setObjectName("hint");
-    limit_row->addWidget(limit_caption);
-    limit_row->addWidget(days);
-    limit_row->addStretch();
-    extrapolation_layout->addLayout(limit_row);
-    settings_layout->addWidget(extrapolation);
-    auto *extrapolation_note = new QLabel(
+    policy_title->form()->addRow(limit_caption, days);
+    auto *extrapolation_note = policy_title->add_caution(
         QStringLiteral("端点线性估算，距离覆盖时段越远，误差越大。闰秒有效期不会随外推延长。"));
-    extrapolation_note->setObjectName("hint");
-    extrapolation_note->setWordWrap(true);
-    settings_layout->addWidget(extrapolation_note);
+    align_form_labels(policy_title->parentWidget());
     settings_layout->addStretch();
     auto *technical = new QLabel;
     technical->setObjectName("dataInventoryDetails");
@@ -546,7 +591,7 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
     auto *footer_panel = new QWidget;
     footer_panel->setObjectName("dataFooter");
     auto *footer = new QHBoxLayout(footer_panel);
-    footer->setContentsMargins(24, 12, 24, 12);
+    footer->setContentsMargins(theme::space::footer);
     auto *usage = new QLabel(QStringLiteral("打开或重算时检查数据，数据变化后需确认。"));
     usage->setWordWrap(true);
     usage->setObjectName("hint");
@@ -558,8 +603,7 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
     close->setMinimumWidth(88);
     footer->addWidget(close);
     layout->addWidget(footer_panel);
-    responsive_columns(acquisition, actions, 520);
-    responsive_columns(automatic_row, automatic_layout, 380);
+    responsive_columns(acquisition, actions, 380);
     bool narrow = false, showing_details = false;
     const auto show_panels = [&] {
         sidebar->setVisible(!narrow || !showing_details);
@@ -591,7 +635,8 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
     QString operation_error;
     bool syncing_priority = false;
     const auto selected = [&]() -> std::optional<DataProduct> {
-        return list->currentItem() == eop_node
+        return list->currentItem() == eop_node || list->currentItem() == gravity_node ||
+                       list->currentItem() == ephemeris_node || list->currentItem() == ocean_node
                    ? std::nullopt
                    : std::optional{static_cast<DataProduct>(
                          list->currentItem()->data(0, Qt::UserRole).toInt())};
@@ -605,6 +650,9 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
     };
     const auto update_details = [&] {
         const bool group = !selected();
+        gravity_summary->setVisible(list->currentItem() == gravity_node ||
+                                    list->currentItem() == ephemeris_node ||
+                                    list->currentItem() == ocean_node);
         priority_scroll->setVisible(group);
         pages->setVisible(!group);
         state->setVisible(!group);
@@ -612,6 +660,39 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
         note->setVisible(!group);
         technical->setVisible(!group);
         if (group) {
+            if (list->currentItem() == ephemeris_node) {
+                priority_scroll->hide();
+                title->setText(QStringLiteral("太阳系星历"));
+                data_description->setText(
+                    QStringLiteral("统一管理 HPOP 使用的太阳、月球位置数据。"));
+                gravity_summary->setText(QStringLiteral(
+                    "JPL DE440s\n\n完整文件约 32 MiB，安装后支持 1850—2150 年的日月与行星引力计算。"
+                    "\n\n选择左侧 DE440s 下载或导入文件，然后在 HPOP 的“力模型 → "
+                    "引力”页启用相应第三体。"
+                    "\n\n星历覆盖不使用外推。每次计算固定数据内容，更新后重新计算需确认。"));
+                return;
+            }
+            if (list->currentItem() == ocean_node) {
+                priority_scroll->hide();
+                title->setText(QStringLiteral("海潮模型"));
+                data_description->setText(QStringLiteral("管理 HPOP 使用的海潮引力系数。"));
+                gravity_summary->setText(QStringLiteral(
+                    "FES2014bv1\n\n官方公开势系数文件约 10.7 MiB，包含 36 个显式分潮，最高 100 × "
+                    "100。"
+                    "\n\n在 HPOP 的“引力 → 海潮”中启用，并独立设置阶数和次数。"
+                    "适用时自动包含海洋极潮。\n\n外部模型使用相同的 FES 归一化势系数格式。"));
+                return;
+            }
+            if (list->currentItem() == gravity_node) {
+                gravity_summary->setText(QStringLiteral(
+                    "EGM2008 / EGM96\n\n下载完整球谐系数文件，或导入 GFC / GRV 重力场。"
+                    "\n\n在 HPOP 中选择模型与阶次；每次计算固定所选数据。静态模型无固定有效期。"));
+                priority_scroll->hide();
+                title->setText(QStringLiteral("地球重力场"));
+                data_description->setText(QStringLiteral(
+                    "下载完整模型，或导入自己的重力文件。在 HPOP 设置中选择使用的模型和阶次。"));
+                return;
+            }
             title->setText(QStringLiteral("地球定向参数"));
             data_description->setText(
                 QStringLiteral("拖动数据来源调整计算顺序，排在上方的优先使用。"));
@@ -622,14 +703,19 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
         }
         const auto &item = selected_item();
         const bool is_time = item.product == DataProduct::utc;
+        const bool is_gravity = gravity_product(item.product);
+        const bool is_ocean = ocean_product(item.product);
+        const bool is_ephemeris = item.product == DataProduct::de440s;
         acquisition->show();
         policy_title->setVisible(item.extrapolation);
         extrapolation->setVisible(item.extrapolation);
         extrapolation_note->setVisible(item.extrapolation);
         download->setVisible(item.online_updates);
         raw->setVisible(item.raw_import);
-        manifest->setVisible(item.manifest_import);
-        manifest->setText(QStringLiteral("导入带清单的数据包…"));
+        manifest->setVisible(item.manifest_import || is_ephemeris);
+        manifest->setText(is_ephemeris ? QStringLiteral("导入星历数据包…")
+                                       : QStringLiteral("导入带清单的数据包…"));
+        planetary_centres->setVisible(is_ephemeris);
         automatic_row->setVisible(item.online_updates);
         schedule->setVisible(item.online_updates);
         const QSignalBlocker auto_block(automatic), frequency_block(frequency), allow_block(allow),
@@ -650,13 +736,18 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
             days->setEnabled(limit > 0);
             limit_caption->setEnabled(limit > 0);
         }
-        title->setText(is_time                                    ? QStringLiteral("UTC / 闰秒")
-                       : item.product == DataProduct::finals2000a ? QStringLiteral("finals2000A")
-                                                                  : QStringLiteral("C04"));
-        data_description->setText(is_time ? QStringLiteral("UTC、TAI 与 TT 之间的时间转换")
-                                  : item.product == DataProduct::finals2000a
-                                      ? QStringLiteral("快速观测与预测 · 适用于近期和未来时段")
-                                      : QStringLiteral("综合参考序列 · 历史时段的默认首选"));
+        title->setText(product_name(item.product));
+        data_description->setText(
+            item.product == DataProduct::space_weather
+                ? QStringLiteral(
+                      "F10.7 / Kp / Ap · 原始记录范围；计算另检查模型滞后、历史窗口和缺值")
+            : is_ocean     ? QStringLiteral("海潮势系数 · HPOP / 机动滑行共用")
+            : is_gravity   ? QStringLiteral("地球静态球谐重力场 · HPOP / 机动滑行共用")
+            : is_ephemeris ? QStringLiteral("JPL 行星星历 · 太阳系第三体引力")
+            : is_time      ? QStringLiteral("UTC、TAI 与 TT 之间的时间转换")
+            : item.product == DataProduct::finals2000a
+                ? QStringLiteral("快速观测与预测 · 适用于近期和未来时段")
+                : QStringLiteral("综合参考序列 · 历史时段的默认首选"));
         state->setText(installation_text(item));
         state->setProperty("tone", item.installation == DataInstallation::bundled_sample ||
                                            item.installation == DataInstallation::missing
@@ -670,13 +761,68 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
                           : item.installation == DataInstallation::missing
                               ? QStringLiteral("尚未下载或导入")
                               : QStringLiteral("未记录（已有本地文件）"));
-        first->setText(coverage_time(item.first));
-        until->setText(coverage_time(item.last) +
-                       (item.exclusive_end ? QStringLiteral("\n不含当日") : QString{}));
+        qobject_cast<QLabel *>(form->labelForField(first))
+            ->setText(is_gravity || is_ocean ? QStringLiteral("可用阶 × 次")
+                      : is_ephemeris         ? QStringLiteral("覆盖起点（TAI）")
+                                             : QStringLiteral("覆盖起点（UTC）"));
+        first->setText(is_ocean     ? (item.ocean_tides ? QStringLiteral("%1 × %2")
+                                                          .arg(item.ocean_tides->degree)
+                                                          .arg(item.ocean_tides->order)
+                                                        : QStringLiteral("下载或导入后显示"))
+                       : is_gravity ? (item.gravity ? QStringLiteral("%1 × %2")
+                                                          .arg(item.gravity->degree)
+                                                          .arg(item.gravity->order)
+                                                    : QStringLiteral("下载或导入后显示"))
+                                    : coverage_time(item.first));
+        until->setText(is_gravity || is_ocean
+                           ? QStringLiteral("无固定有效期")
+                           : coverage_time(item.last) +
+                                 (item.exclusive_end ? QStringLiteral("\n不含当日") : QString{}));
         qobject_cast<QLabel *>(form->labelForField(until))
-            ->setText(is_time ? QStringLiteral("有效截止（UTC）")
-                              : QStringLiteral("覆盖截止（UTC）"));
-        if (is_time)
+            ->setText(is_gravity || is_ocean ? QStringLiteral("有效期")
+                      : is_ephemeris         ? QStringLiteral("覆盖截止（TAI）")
+                      : is_time              ? QStringLiteral("有效截止（UTC）")
+                                             : QStringLiteral("覆盖截止（UTC）"));
+        if (is_gravity)
+            note->setText(
+                item.gravity
+                    ? QStringLiteral(
+                          "%1 · %2\nGM = %3 m³/s² · 参考半径 %4 "
+                          "m · 固体潮 k20 = %5\n计算开始时固定文件；更新不会改变正在运行的计算。")
+                              .arg(QString::fromStdString(item.gravity->model),
+                                   QString::fromStdString(item.gravity->tide_system))
+                              .arg(item.gravity->mu, 0, 'g', 15)
+                              .arg(item.gravity->radius_m, 0, 'g', 15)
+                              .arg(item.gravity->solid_tide_k20, 0, 'g', 15) +
+                          (item.gravity->secular_variations
+                               ? QStringLiteral(
+                                     "\n长期变化：参考历元 JD %1 TT，%2 项变化率 / 儒略年")
+                                     .arg(2451545.0 +
+                                              (item.gravity->secular_variations->reference_epoch
+                                                   .seconds_since(core::Epoch{0}) +
+                                               32.184) /
+                                                  86400,
+                                          0, 'f', 9)
+                                     .arg(item.gravity->secular_variations->rates_per_year.size())
+                               : QStringLiteral("\n文件未定义长期变化。"))
+                : item.product == DataProduct::egm2008
+                    ? QStringLiteral(
+                          "官方完整文件约 240 MiB，下载后在后台校验。静态模型默认不自动下载。")
+                    : QStringLiteral("导入或下载完整重力场后，可在 HPOP 中选择模型与阶次。"));
+        else if (is_ocean)
+            note->setText(
+                item.ocean_tides
+                    ? QStringLiteral(
+                          "%1 · %2 个显式分潮\n计算开始时固定文件；更新不会改变正在运行的计算。")
+                          .arg(QString::fromStdString(item.ocean_tides->model))
+                          .arg(item.ocean_tides->constituents)
+                    : QStringLiteral("下载官方 FES2014bv1，或导入外部 FES 势系数文件。"));
+        else if (is_ephemeris)
+            note->setText(QStringLiteral(
+                "完整 DE440s 约 32 MiB · NAIF 官方文件\n"
+                "HPOP 使用地心几何位置与 DE440 配套 GM；日月、行星和冥王星可独立启用。"
+                "覆盖为可计算时段，静态星历不按下载日期到期，也不作外推。"));
+        else if (is_time)
             note->setText(QDateTime::currentDateTimeUtc() >= item.last
                               ? QStringLiteral("闰秒数据已到期，请检查更新后再计算后续时段。")
                               : QStringLiteral("有效期来自 IERS 公告；到期后可在此联网更新。"));
@@ -753,22 +899,50 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
         catalog.start_download({}, *selected());
     });
     QObject::connect(manifest, &QPushButton::clicked, &dialog, [&] {
-        const auto file = QFileDialog::getOpenFileName(&dialog, QStringLiteral("导入 EOP 数据"), {},
-                                                       QStringLiteral("数据清单 (*.json)"));
+        const auto file = QFileDialog::getOpenFileName(&dialog,
+                                                       selected() == DataProduct::de440s
+                                                           ? QStringLiteral("导入星历数据包")
+                                                           : QStringLiteral("导入 EOP 数据"),
+                                                       {}, QStringLiteral("数据清单 (*.json)"));
         if (file.isEmpty())
             return;
         operation_error.clear();
         try {
-            const auto index = catalog.import_snapshot(std::filesystem::path(file.toStdWString()));
+            if (selected() == DataProduct::de440s) {
+                catalog.import_ephemeris_snapshot(std::filesystem::path(file.toStdWString()));
+                rebuild();
+            } else {
+                const auto index =
+                    catalog.import_snapshot(std::filesystem::path(file.toStdWString()));
+                rebuild();
+                select_provider(static_cast<int>(index));
+            }
+        } catch (const std::exception &error) {
+            show_error(error);
+        }
+    });
+    QObject::connect(planetary_centres, &QPushButton::clicked, &dialog, [&] {
+        const auto file = QFileDialog::getOpenFileName(&dialog, QStringLiteral("导入行星本体星历"),
+                                                       {}, QStringLiteral("SPICE 星历 (*.bsp)"));
+        if (file.isEmpty())
+            return;
+        operation_error.clear();
+        try {
+            catalog.import_planetary_centres(std::filesystem::path(file.toStdWString()));
             rebuild();
-            select_provider(static_cast<int>(index));
         } catch (const std::exception &error) {
             show_error(error);
         }
     });
     QObject::connect(raw, &QPushButton::clicked, &dialog, [&] {
         const auto file = QFileDialog::getOpenFileName(
-            &dialog, QStringLiteral("导入 %1 文件").arg(title->text()));
+            &dialog, QStringLiteral("导入 %1 文件").arg(title->text()), {},
+            ocean_product(*selected()) ? QStringLiteral("海潮势系数 (*.txt *.pot);;所有文件 (*)")
+            : *selected() == DataProduct::space_weather
+                ? QStringLiteral("空间天气 (*.csv *.txt *.fxm *.dat);;所有文件 (*)")
+            : *selected() == DataProduct::de440s ? QStringLiteral("DE440s 星历 (de440s.bsp *.bsp)")
+            : gravity_product(*selected()) ? QStringLiteral("重力场 (*.gfc *.grv);;所有文件 (*)")
+                                           : QStringLiteral("所有文件 (*)"));
         if (file.isEmpty())
             return;
         operation_error.clear();
@@ -823,25 +997,26 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
             seen_day = today;
         }
         const bool busy = catalog.downloading();
-        for (auto *node : {finals_node, c04_node, utc_node}) {
+        for (auto *node : {finals_node, c04_node, utc_node, egm2008_node, egm96_node, custom_node,
+                           de440s_node, weather_node, fes_node, custom_ocean_node}) {
             const auto &entry =
                 inventory_item(static_cast<DataProduct>(node->data(0, Qt::UserRole).toInt()));
-            const auto name = entry.product == DataProduct::finals2000a
-                                  ? QStringLiteral("finals2000A")
-                              : entry.product == DataProduct::c04 ? QStringLiteral("C04")
-                                                                  : QStringLiteral("UTC / 闰秒");
+            const auto name = product_name(entry.product);
             const auto update = catalog.update_status(entry.product);
             const bool failed = update.state == DataUpdateState::failed ||
                                 update.state == DataUpdateState::interrupted;
             const auto installation = (busy && catalog.active_product() == entry.product) || failed
                                           ? check_text(update.state)
                                           : installation_text(entry);
-            node->setText(0, name + "\n" + installation + "\n" +
-                                 (entry.last.isValid() ? (entry.product == DataProduct::utc
-                                                              ? QStringLiteral("有效至 ")
-                                                              : QStringLiteral("覆盖至 ")) +
-                                                             entry.last.date().toString(Qt::ISODate)
-                                                       : QStringLiteral("尚无覆盖数据")));
+            node->setText(
+                0, name + "\n" + installation + "\n" +
+                       (ocean_product(entry.product)     ? QStringLiteral("海潮系数 · 无固定有效期")
+                        : gravity_product(entry.product) ? QStringLiteral("静态模型 · 无固定有效期")
+                        : entry.last.isValid()
+                            ? (entry.product == DataProduct::utc ? QStringLiteral("有效至 ")
+                                                                 : QStringLiteral("覆盖至 ")) +
+                                  entry.last.date().toString(Qt::ISODate)
+                            : QStringLiteral("尚无覆盖数据")));
             node->setData(0, Qt::UserRole + 1, entry.online_updates && failed);
             node->setToolTip(0, node->text(0));
         }
@@ -890,6 +1065,7 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
                               : QStringLiteral("检查并更新"));
         download->setEnabled(!busy);
         raw->setEnabled(!busy);
+        planetary_centres->setEnabled(!busy);
         manifest->setEnabled(!busy);
         cancel->setVisible(downloading_this);
         progress->setVisible(downloading_this);
@@ -904,7 +1080,8 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
                               ? QStringLiteral("在应用运行时检查；尚未安装完整文件时会自动下载。")
                               : QStringLiteral("自动更新已关闭，可随时手动下载或检查。"));
         QString message = operation_error;
-        if (message.isEmpty() && item.online_updates) {
+        if (message.isEmpty() &&
+            (item.online_updates || gravity_product(item.product) || ocean_product(item.product))) {
             if (downloading_this) {
                 message = update.message;
                 if (catalog.received_bytes() > 0)
@@ -947,6 +1124,15 @@ void show_data_center(QWidget *parent, EopCatalog &catalog) {
     QObject::connect(&timer, &QTimer::timeout, &dialog, refresh);
     timer.start(150);
     refresh();
+    if (initial) {
+        for (auto *node : {finals_node, c04_node, utc_node, egm2008_node, egm96_node, custom_node,
+                           de440s_node, weather_node, fes_node, custom_ocean_node})
+            if (node->data(0, Qt::UserRole).toInt() == static_cast<int>(*initial)) {
+                list->setCurrentItem(node);
+                list->itemActivated(node, 0);
+                break;
+            }
+    }
     dialog.exec();
 }
 } // namespace orbitforge::desktop

@@ -163,7 +163,7 @@ EpochEditor::EpochEditor(QWidget *parent, std::shared_ptr<const core::ITimeProvi
     picker_button_->setObjectName("openEpochPicker");
     picker_button_->setIcon(workbench_icon(WorkbenchIcon::calendar));
     picker_button_->setToolTip(QStringLiteral("选择日期、时间和时间标准"));
-    picker_button_->setFixedSize(30, 30);
+    picker_button_->setFixedSize(24, 24);
     row->addWidget(picker_button_);
     layout->addWidget(box);
     error_ = new QLabel;
@@ -276,7 +276,7 @@ void EpochEditor::open_picker() {
     auto *popup = new QFrame(this, Qt::Popup);
     popup->setObjectName("epochPopup");
     auto *layout = new QVBoxLayout(popup);
-    layout->setContentsMargins(12, 10, 12, 10);
+    layout->setContentsMargins(theme::space::card);
     layout->setSpacing(8);
     auto *header = new QHBoxLayout;
     header->addWidget(new QLabel(QStringLiteral("日期与时间")), 1);
@@ -294,7 +294,7 @@ void EpochEditor::open_picker() {
     calendar->setHorizontalHeaderFormat(QCalendarWidget::ShortDayNames);
     calendar->setFirstDayOfWeek(Qt::Monday);
     QTextCharFormat weekend;
-    weekend.setForeground(QColor("#a6bdd2"));
+    weekend.setForeground(theme::color(theme::sakura));
     calendar->setWeekdayTextFormat(Qt::Saturday, weekend);
     calendar->setWeekdayTextFormat(Qt::Sunday, weekend);
     layout->addWidget(calendar);

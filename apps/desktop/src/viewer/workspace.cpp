@@ -103,7 +103,7 @@ Workspace::Workspace(QWidget *parent) : QWidget(parent) {
     parking_->hide();
     root_ = new QSplitter(Qt::Horizontal);
     root_->setChildrenCollapsible(false);
-    root_->setHandleWidth(5);
+    root_->setHandleWidth(6);
     layout->addWidget(root_);
     root_->addWidget(make_pane());
     drop_hint_ = new QRubberBand(QRubberBand::Rectangle);
@@ -114,8 +114,7 @@ Workspace::Workspace(QWidget *parent) : QWidget(parent) {
     drag_label_->setWindowFlags(Qt::ToolTip | Qt::FramelessWindowHint |
                                 Qt::WindowTransparentForInput);
     drag_label_->setAttribute(Qt::WA_ShowWithoutActivating);
-    drag_label_->setStyleSheet(
-        "background: #343d61; color: #e3e8ff; border: 1px solid #a3afff; padding: 6px 12px;");
+    drag_label_->setObjectName("dragPage");
     connect(qApp, &QApplication::focusChanged, this, [this](QWidget *, QWidget *now) {
         for (auto *pane : panes_)
             if (now && pane->isAncestorOf(now)) {
@@ -151,7 +150,7 @@ Workspace::Pane *Workspace::make_pane(QDialog *window) {
     heading->setObjectName("workspaceHeading");
     heading->setFixedHeight(34);
     auto *bar = new QHBoxLayout(heading);
-    bar->setContentsMargins(0, 0, 6, 0);
+    bar->setContentsMargins(6, 0, 6, 0);
     bar->setSpacing(2);
     pane->tabs = new PageTabs;
     pane->tabs->setObjectName("workspaceTabs");
@@ -259,7 +258,8 @@ void Workspace::append(Page &page, Pane *pane, int insertion) {
     pane->tabs->setTabData(tab, QVariant::fromValue(reinterpret_cast<quintptr>(&page)));
     pane->tabs->setTabToolTip(tab, page.title);
     auto *close = new QToolButton;
-    close->setIcon(workbench_icon(WorkbenchIcon::close));
+    close->setObjectName("closePage");
+    close->setIcon(workbench_icon(WorkbenchIcon::close, theme::color(theme::text_muted)));
     close->setFixedSize(20, 20);
     close->setIconSize(QSize(14, 14));
     close->setToolTip(QStringLiteral("关闭页面"));
@@ -421,7 +421,7 @@ void Workspace::move(Page &page, Pane *target, Qt::Edge edge, int insertion) {
         } else {
             auto *branch = new QSplitter(orientation);
             branch->setChildrenCollapsible(false);
-            branch->setHandleWidth(5);
+            branch->setHandleWidth(6);
             splitter->replaceWidget(splitter->indexOf(target), branch);
             branch->addWidget(before ? next : target);
             branch->addWidget(before ? target : next);

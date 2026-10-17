@@ -1,5 +1,6 @@
 #include "orbit_editor.hpp"
 #include "epoch_editor.hpp"
+#include "form_kit.hpp"
 #include "hpop_settings.hpp"
 #include "mission_editor.hpp"
 #include "quantity_editor.hpp"
@@ -24,6 +25,8 @@
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QStackedWidget>
+#include <QStyle>
+#include <QTabBar>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -33,6 +36,12 @@
 
 namespace orbitforge::desktop {
 namespace {
+// Result lines use the themed muted/danger tones from the application stylesheet.
+void restyle_message(QLabel *label, bool error) {
+    label->setProperty("error", error);
+    label->style()->unpolish(label);
+    label->style()->polish(label);
+}
 constexpr std::array element_units{Unit::metre,  Unit::one,    Unit::radian,
                                    Unit::radian, Unit::radian, Unit::radian};
 class StatePages final : public QStackedWidget {
@@ -65,12 +74,38 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
     auto *outer = new QHBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
-    compact_navigation_ = new QComboBox(this);
+    // Page navigation adapts to the width: a tree beside wide pages, a row of tabs in an
+    // inspector-width pane, and a selector when even tabs would not fit.
+    auto *compact_bar = new QWidget(this);
+    compact_bar->setObjectName("propertyCompactBar");
+    auto *compact_layout = new QHBoxLayout(compact_bar);
+    compact_layout->setContentsMargins(24, 12, 24, 0);
+    compact_navigation_ = new QComboBox(compact_bar);
     compact_navigation_->setObjectName("propertyPageSelector");
     compact_navigation_->setAccessibleName(QStringLiteral("属性页面"));
     compact_navigation_->addItems({QStringLiteral("轨道"), QStringLiteral("轨迹显示"),
                                    QStringLiteral("二维视图"), QStringLiteral("三维视图与模型")});
-    outer->addWidget(compact_navigation_);
+    compact_layout->addWidget(compact_navigation_, 1);
+    page_tabs_ = new QTabBar(compact_bar);
+    page_tabs_->setObjectName("propertyPageTabs");
+    page_tabs_->setAccessibleName(QStringLiteral("属性页面"));
+    page_tabs_->setDrawBase(false);
+    page_tabs_->setExpanding(false);
+    page_tabs_->setUsesScrollButtons(true);
+    for (const auto &[label, tip] :
+         {std::pair{QStringLiteral("轨道"), QStringLiteral("轨道参数")},
+          std::pair{QStringLiteral("轨迹"), QStringLiteral("轨迹显示")},
+          std::pair{QStringLiteral("二维"), QStringLiteral("二维视图")},
+          std::pair{QStringLiteral("三维"), QStringLiteral("三维视图与模型")}})
+        page_tabs_->setTabToolTip(page_tabs_->addTab(label), tip);
+    compact_layout->addWidget(page_tabs_);
+    compact_layout->addStretch();
+    outer->addWidget(compact_bar);
+    connect(page_tabs_, &QTabBar::currentChanged, compact_navigation_, &QComboBox::setCurrentIndex);
+    connect(compact_navigation_, &QComboBox::currentIndexChanged, page_tabs_, [this](int index) {
+        const QSignalBlocker block(page_tabs_);
+        page_tabs_->setCurrentIndex(index);
+    });
     auto *navigation = new QTreeWidget;
     navigation_ = navigation;
     navigation->setObjectName("propertyNavigation");
@@ -124,16 +159,20 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
                             navigation->setCurrentItem(item);
                     }
             });
-    new WidthObserver(this, [this, outer, mode = WidthMode{}](int width) mutable {
+    new WidthObserver(this, [this, outer, compact_bar, mode = WidthMode{},
+                             tight = WidthMode{}](int width) mutable {
         const bool narrow = mode.narrow(width, 680);
+        const bool selector = tight.narrow(width, 400);
         navigation_->setVisible(!narrow);
-        compact_navigation_->setVisible(narrow);
+        compact_bar->setVisible(narrow);
+        compact_navigation_->setVisible(narrow && selector);
+        page_tabs_->setVisible(narrow && !selector);
         outer->setDirection(narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
     });
     auto *orbit_tab = new QWidget;
     tabs->addWidget(orbit_tab);
     auto *layout = new QVBoxLayout(orbit_tab);
-    layout->setContentsMargins(20, 16, 20, 14);
+    layout->setContentsMargins(theme::space::page);
     layout->setSpacing(12);
     auto *header = new QHBoxLayout;
     auto *title = new QLabel(QStringLiteral("轨道参数"));
@@ -144,14 +183,19 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
     auto *identity = new QHBoxLayout(identity_row);
     identity->setContentsMargins(0, 0, 0, 0);
     identity->setSpacing(10);
-    identity->addWidget(new QLabel(QStringLiteral("对象 ID")));
+    auto *identity_label = new QLabel(QStringLiteral("对象 ID"));
+    identity_label->setObjectName("muted");
+    identity_label->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
+    identity->addWidget(identity_label);
     object_ = new QLineEdit;
     object_->setObjectName("objectId");
     object_->setAccessibleName(QStringLiteral("卫星对象 ID"));
     object_->setMaximumWidth(250);
     object_->setMinimumWidth(60);
     identity->addWidget(object_, 1);
-    header->addWidget(identity_row);
+    header->addSpacing(8);
+    // Width-limited rows are centred by default once the header stacks vertically.
+    header->addWidget(identity_row, 0, Qt::AlignLeft);
     header->addStretch();
     auto *body = new QLabel(QStringLiteral("中心天体  /  地球"));
     body->setObjectName("hint");
@@ -159,39 +203,30 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
     layout->addLayout(header);
     responsive_columns(orbit_tab, header, 480);
     new WidthObserver(orbit_tab, [body](int width) { body->setVisible(width >= 600); });
-    layout->addWidget(divider());
+    // The first group's top rule separates the header; no extra divider here.
     fields_ = new QWidget;
     fields_->setObjectName("propertyFields");
     fields_->setMaximumWidth(900);
     auto *columns = new QHBoxLayout(fields_);
-    columns->setContentsMargins(0, 0, 0, 0);
-    columns->setSpacing(16);
-    auto *settings = new QFrame;
-    auto *initial_state = new QFrame;
-    settings->setObjectName("formSection");
-    initial_state->setObjectName("formSection");
+    // Room for the overlay scroll bar so it never covers field edges.
+    columns->setContentsMargins(0, 0, 10, 0);
+    columns->setSpacing(24);
+    // Left: propagation settings and the read-only scenario span; right: the initial state.
+    auto *settings = new QWidget;
+    auto *settings_layout = new QVBoxLayout(settings);
+    settings_layout->setContentsMargins(0, 0, 0, 0);
+    settings_layout->setSpacing(0);
+    auto *propagation_group = new FormGroup(QStringLiteral("传播设置"));
+    auto *span_group = new FormGroup(QStringLiteral("所属场景时段"));
+    settings_layout->addWidget(propagation_group);
+    settings_layout->addWidget(span_group);
+    auto *state_group = new FormGroup(QStringLiteral("初始状态"));
     columns->addWidget(settings, 1, Qt::AlignTop);
-    columns->addWidget(initial_state, 1, Qt::AlignTop);
-    auto *form = new QFormLayout(settings);
-    auto *state_form = new QFormLayout(initial_state);
-    state_form->setContentsMargins(14, 10, 14, 16);
-    state_form->setVerticalSpacing(8);
-    state_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-    auto *state_title = new QLabel(QStringLiteral("初始状态"));
-    state_title_ = state_title;
-    state_title->setObjectName("sectionTitle");
-    state_form->addRow(state_title);
-    form->setContentsMargins(14, 10, 14, 16);
-    form->setVerticalSpacing(8);
-    form->setHorizontalSpacing(10);
-    form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-    const auto section = [&](const QString &text) {
-        auto *label = new QLabel(text);
-        label->setObjectName("sectionTitle");
-        form->addRow(label);
-    };
-    section(QStringLiteral("传播设置"));
+    columns->addWidget(state_group, 1, Qt::AlignTop);
+    auto *form = propagation_group->form();
+    auto *span_form = span_group->form();
+    auto *state_form = state_group->form();
+    state_title_ = state_group->title();
     auto *propagator_row = new QHBoxLayout;
     propagator_row->setSpacing(6);
     propagator_ = new QComboBox;
@@ -215,14 +250,12 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
     hpop_summary_->setObjectName("hint");
     hpop_summary_->setWordWrap(true);
     form->addRow(hpop_summary_);
-    responsive_columns(settings, propagator_row, 360);
     connect(model_button, &QPushButton::clicked, this, &OrbitEditor::open_propagator_details);
     connect(propagator_, &QComboBox::currentIndexChanged, this,
             [this](int index) { set_propagator(static_cast<OrbitPropagator>(index)); });
     epoch_ = new EpochEditor;
     epoch_label_ = new QLabel(QStringLiteral("初始历元"));
-    form->addRow(epoch_label_);
-    form->addRow(epoch_);
+    form->addRow(epoch_label_, epoch_);
     reference_frame_ = new QComboBox;
     reference_frame_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     reference_frame_->setMinimumContentsLength(8);
@@ -230,7 +263,7 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
     reference_frame_->setAccessibleName(QStringLiteral("初始状态参考系"));
     reference_frame_->addItems({QStringLiteral("GCRF · 地心惯性"), QStringLiteral("ITRF · 地固")});
     reference_frame_->setToolTip(QStringLiteral("ITRF 使用位置 / 速度；轨道根数在 GCRF 下定义。"));
-    form->insertRow(2, QStringLiteral("参考系"), reference_frame_);
+    form->insertRow(1, QStringLiteral("参考系"), reference_frame_);
     connect(reference_frame_, &QComboBox::currentIndexChanged, this, [this](int index) {
         if (propagator_kind_ == OrbitPropagator::sgp4)
             return;
@@ -252,7 +285,8 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
     auto *cartesian_page = new QWidget;
     auto *cartesian_form = new QFormLayout(cartesian_page);
     cartesian_form->setContentsMargins(0, 0, 0, 0);
-    cartesian_form->setVerticalSpacing(8);
+    cartesian_form->setHorizontalSpacing(theme::space::md);
+    cartesian_form->setVerticalSpacing(theme::space::row);
     cartesian_form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     state_pages_->addWidget(cartesian_page);
     const auto vector_row = [&](const QString &label, Unit unit, const QString &name,
@@ -266,6 +300,7 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
             fields[i]->setObjectName(name + axis);
             fields[i]->set_label(label + " " + axis);
             fields[i]->set_single_step(1, unit);
+            fields[i]->setMaximumWidth(QWIDGETSIZE_MAX);
             cartesian_form->addRow(axis, fields[i]);
         }
     };
@@ -274,7 +309,8 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
     auto *keplerian_page = new QWidget;
     auto *keplerian_form = new QFormLayout(keplerian_page);
     keplerian_form->setContentsMargins(0, 0, 0, 0);
-    keplerian_form->setVerticalSpacing(10);
+    keplerian_form->setHorizontalSpacing(theme::space::md);
+    keplerian_form->setVerticalSpacing(theme::space::row);
     keplerian_form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     const QStringList labels{QStringLiteral("半长轴 a"),     QStringLiteral("偏心率 e"),
                              QStringLiteral("倾角 i"),       QStringLiteral("升交点赤经 Ω"),
@@ -295,6 +331,8 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
         field->set_single_step(i == 0 ? 10 : i == 1 ? 0.001 : 1, unit);
         field->set_label(labels[static_cast<int>(i)]);
         field->setObjectName(names[static_cast<int>(i)]);
+        // Fields fill their column so every right edge in the column lines up.
+        field->setMaximumWidth(QWIDGETSIZE_MAX);
         elements_[i] = field;
         keplerian_form->addRow(labels[static_cast<int>(i)], field);
         if (i == 5)
@@ -361,19 +399,22 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
         field->set_read_only(true);
         auto *caption = new QLabel(label);
         caption->setObjectName("hint");
-        form->addRow(caption, field);
+        span_form->addRow(caption, field);
     };
-    section(QStringLiteral("所属场景时段"));
-    time_row(QStringLiteral("起点"), first_);
-    time_row(QStringLiteral("终点"), last_);
-    first_->setToolTip(QStringLiteral("分析时段由所属 Scenario 统一管理"));
-    last_->setToolTip(first_->toolTip());
+    // The display step is the propagation output sampling, so it belongs with the
+    // propagation settings; the scenario span below is read-only context.
     step_ = new QuantityEditor(Unit::second);
     step_->setObjectName("displayStep");
     step_->set_range(1, 60, Unit::second);
     step_->set_quantum(1, Unit::second);
-    step_->set_label(QStringLiteral("显示步长"));
-    form->addRow(QStringLiteral("显示步长"), step_);
+    step_->set_label(QStringLiteral("轨道步长"));
+    step_->setMaximumWidth(QWIDGETSIZE_MAX);
+    form->addRow(QStringLiteral("轨道步长"), step_);
+    span_group->add_help(QStringLiteral("分析时段由所属场景统一管理，可在场景设置中修改。"));
+    time_row(QStringLiteral("起点"), first_);
+    time_row(QStringLiteral("终点"), last_);
+    first_->setToolTip(QStringLiteral("分析时段由所属 Scenario 统一管理"));
+    last_->setToolTip(first_->toolTip());
     auto *parameters = new QScrollArea;
     parameters->setObjectName("orbitParametersScroll");
     parameters->setWidgetResizable(true);
@@ -381,8 +422,11 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
     parameters->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     parameters->setWidget(fields_);
     responsive_columns(parameters->viewport(), columns, 720);
-    responsive_form(form, 400);
+    // Labels stay beside fields down to inspector-column widths.
+    responsive_form(form, 360);
+    responsive_form(span_form, 360);
     responsive_form(keplerian_form, 350);
+    align_form_labels(settings);
     layout->addWidget(parameters, 1);
     layout->addWidget(divider());
     message_ = new QLabel;
@@ -394,8 +438,9 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
     layout->addWidget(message_);
     auto *buttons = new QHBoxLayout;
     buttons->addStretch();
-    apply_ = new QPushButton(QStringLiteral("应用轨道"));
-    apply_->setToolTip(QStringLiteral("根据当前参数重新计算并更新场景"));
+    apply_ = new QPushButton(QStringLiteral("应用"));
+    apply_->setToolTip(QStringLiteral("应用轨道参数，重新计算并更新场景"));
+    apply_->setAccessibleName(QStringLiteral("应用轨道"));
     apply_->setObjectName("applyOrbit");
     cancel_ = new QPushButton(QStringLiteral("取消计算"));
     cancel_->setEnabled(false);
@@ -419,7 +464,7 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
         auto *page = new QWidget;
         tabs->addWidget(page);
         auto *stack = new QVBoxLayout(page);
-        stack->setContentsMargins(20, 16, 20, 14);
+        stack->setContentsMargins(theme::space::page);
         stack->setSpacing(12);
         auto *title = new QLabel(heading);
         title->setObjectName("panelTitle");
@@ -431,8 +476,10 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
         return stack;
     };
     const auto apply_display = [&](QVBoxLayout *stack) {
-        auto *apply = new QPushButton(QStringLiteral("应用显示设置"));
+        auto *apply = new QPushButton(QStringLiteral("应用"));
         apply->setObjectName("applyDisplay");
+        apply->setToolTip(QStringLiteral("应用轨迹显示设置"));
+        apply->setAccessibleName(QStringLiteral("应用显示设置"));
         apply->setProperty("primary", true);
         display_buttons_.push_back(apply);
         connect(apply, &QPushButton::clicked, this, [this] { submit_display(); });
@@ -445,22 +492,34 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
         error->hide();
         display_messages_.push_back(error);
         stack->addWidget(error);
-        stack->addWidget(apply, 0, Qt::AlignRight);
+        // Same footer as the orbit and 3D pages: Close, then the page's single Apply.
+        auto *buttons = new QHBoxLayout;
+        buttons->addStretch();
+        auto *close = new QPushButton(QStringLiteral("关闭"));
+        close->setAutoDefault(false);
+        connect(close, &QPushButton::clicked, this, [this] {
+            if (close_requested)
+                close_requested();
+        });
+        buttons->addWidget(close);
+        buttons->addWidget(apply);
+        stack->addLayout(buttons);
     };
     auto *common = display_page(QStringLiteral("轨迹显示"),
                                 QStringLiteral("当前卫星的二维与三维视图共用这些样式与显示范围。"));
-    auto *common_form = new QFormLayout;
-    common_form->setContentsMargins(0, 0, 0, 0);
-    common_form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    auto *style_group = new FormGroup(QStringLiteral("线条样式"));
+    auto *extent_group = new FormGroup(QStringLiteral("显示范围"));
+    auto *common_form = extent_group->form();
     track_extent_ = new QComboBox;
     track_extent_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     track_extent_->setMinimumContentsLength(8);
     track_extent_->setObjectName("trackExtent");
-    track_extent_->setMaximumWidth(320);
+    track_extent_->setMaximumWidth(276);
     track_extent_->addItems({QStringLiteral("一圈轨迹"), QStringLiteral("整个场景时段"),
                              QStringLiteral("自定义前后时长")});
-    common_form->addRow(QStringLiteral("显示范围"), track_extent_);
-    track_extent_->setToolTip(QStringLiteral("同时用于二维与三维；非闭合轨道的一圈按一小时显示。"));
+    common_form->addRow(QStringLiteral("范围"), track_extent_);
+    track_extent_->setAccessibleName(QStringLiteral("显示范围"));
+    extent_group->add_help(QStringLiteral("同时用于二维与三维；非闭合轨道的一圈按一小时显示。"));
     const auto duration = [&] {
         auto *field = new QuantityEditor(Unit::minute);
         field->set_range(0, 10080, Unit::minute);
@@ -487,11 +546,11 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
     range_fields->setMaximumWidth(520);
     auto *range_layout = new QVBoxLayout(range_fields);
     range_layout->setContentsMargins(0, 0, 4, 0);
-    range_layout->setSpacing(22);
+    range_layout->setSpacing(0);
     track_style_ = new TrackStyleEditor;
-    range_layout->addWidget(track_style_);
-    range_layout->addWidget(divider());
-    range_layout->addLayout(common_form);
+    style_group->form()->addRow(track_style_);
+    range_layout->addWidget(style_group);
+    range_layout->addWidget(extent_group);
     range_layout->addStretch();
     auto *range_scroll = new QScrollArea;
     range_scroll->setWidgetResizable(true);
@@ -499,28 +558,26 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
     range_scroll->setAlignment(Qt::AlignLeft | Qt::AlignTop);
     range_scroll->setWidget(range_fields);
     responsive_form(common_form, 400);
+    align_form_labels(range_fields);
     common->addWidget(range_scroll, 1);
     apply_display(common);
     auto *map = display_page(QStringLiteral("二维视图设置"),
                              QStringLiteral("设置当前卫星在地图中的轨迹与标注。"));
-    auto *map_options = new QFrame;
-    map_options->setObjectName("formSection");
+    auto *map_options = new FormGroup(QStringLiteral("地图标注"));
     map_options->setMaximumWidth(480);
-    auto *map_layout = new QVBoxLayout(map_options);
-    map_layout->setContentsMargins(18, 14, 18, 14);
-    map_layout->setSpacing(12);
     track_2d_ = new QCheckBox(QStringLiteral("显示地面轨迹"));
     label_2d_ = new QCheckBox(QStringLiteral("显示对象名称"));
-    track_2d_->setChecked(true);
-    label_2d_->setChecked(true);
-    map_layout->addWidget(track_2d_);
-    map_layout->addWidget(label_2d_);
+    for (auto *toggle : {track_2d_, label_2d_}) {
+        toggle->setChecked(true);
+        make_switch(toggle);
+        map_options->form()->addRow(toggle);
+    }
     map->addWidget(map_options);
     apply_display(map);
     auto *appearance_tab = new QWidget;
     tabs->addWidget(appearance_tab);
     auto *appearance_layout = new QVBoxLayout(appearance_tab);
-    appearance_layout->setContentsMargins(20, 16, 20, 14);
+    appearance_layout->setContentsMargins(theme::space::page);
     appearance_layout->setSpacing(12);
     auto *appearance_title = new QLabel(QStringLiteral("三维视图设置"));
     appearance_title->setObjectName("panelTitle");
@@ -534,27 +591,31 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
     appearance_fields->setMaximumWidth(560);
     auto *appearance_content = new QVBoxLayout(appearance_fields);
     appearance_content->setContentsMargins(0, 0, 0, 0);
-    appearance_content->setSpacing(14);
+    appearance_content->setSpacing(0);
+    // Two inspector groups share the page's single Apply in the footer.
+    const auto group = [appearance_content](const QString &title) {
+        auto *frame = new FormGroup(title);
+        appearance_content->addWidget(frame);
+        return frame->form();
+    };
+    auto *track_group = group(QStringLiteral("空间轨迹"));
     track_3d_ = new QCheckBox(QStringLiteral("显示空间轨迹"));
     track_3d_->setChecked(true);
-    appearance_content->addWidget(track_3d_);
-    auto *apply_track = new QPushButton(QStringLiteral("应用显示设置"));
-    apply_track->setObjectName("applyDisplay");
-    display_buttons_.push_back(apply_track);
-    connect(apply_track, &QPushButton::clicked, this, [this] { submit_display(); });
-    appearance_content->addWidget(apply_track, 0, Qt::AlignRight);
+    make_switch(track_3d_);
+    track_group->addRow(track_3d_);
     auto *display_error = new QLabel;
     display_error->setObjectName("inputError");
     display_error->setWordWrap(true);
     display_error->setTextFormat(Qt::PlainText);
     display_error->hide();
     display_messages_.push_back(display_error);
-    appearance_content->addWidget(display_error);
-    appearance_content->addWidget(divider());
+    track_group->addRow(display_error);
+    auto *model_group = group(QStringLiteral("卫星外观"));
     model_fields_ = new QWidget;
     auto *form_model = new QFormLayout(model_fields_);
     form_model->setContentsMargins(0, 0, 0, 0);
-    form_model->setVerticalSpacing(12);
+    form_model->setHorizontalSpacing(theme::space::md);
+    form_model->setVerticalSpacing(theme::space::row);
     form_model->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     form_model->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     model_kind_ = new QComboBox;
@@ -577,7 +638,7 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
     model_diameter_->set_single_step(1, Unit::kilometre);
     model_diameter_->set_value(1000, Unit::kilometre);
     form_model->addRow(QStringLiteral("示意显示直径"), model_diameter_);
-    appearance_content->addWidget(model_fields_);
+    model_group->addRow(model_fields_);
     model_diameter_->setToolTip(QStringLiteral("模型示意尺寸；朝向固定于 ITRF。"));
     appearance_content->addStretch();
     auto *appearance_scroll = new QScrollArea;
@@ -586,12 +647,16 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
     appearance_scroll->setAlignment(Qt::AlignLeft | Qt::AlignTop);
     appearance_scroll->setWidget(appearance_fields);
     responsive_form(form_model, 400);
+    align_form_labels(appearance_fields);
     appearance_layout->addWidget(appearance_scroll, 1);
-    apply_model_ = new QPushButton(QStringLiteral("应用外观"));
+    apply_model_ = new QPushButton(QStringLiteral("应用"));
     apply_model_->setObjectName("applyAppearance");
+    apply_model_->setToolTip(QStringLiteral("应用空间轨迹显示与卫星外观"));
+    apply_model_->setAccessibleName(QStringLiteral("应用三维视图设置"));
     apply_model_->setProperty("primary", true);
     appearance_layout->addWidget(divider());
     model_message_ = new QLabel;
+    model_message_->setObjectName("modelResult");
     model_message_->hide();
     model_message_->setWordWrap(true);
     model_message_->setTextFormat(Qt::PlainText);
@@ -630,15 +695,7 @@ OrbitEditor::OrbitEditor(const OrbitInput &input, QWidget *parent) : QWidget(par
     form_model->setRowVisible(model_path_, false);
     form_model->setRowVisible(browse, false);
     form_model->setRowVisible(model_diameter_, false);
-    connect(apply_model_, &QPushButton::clicked, this, [this] {
-        try {
-            if (appearance)
-                appearance(model_kind_->currentIndex(), model_path_->text(),
-                           model_diameter_->value(Unit::kilometre));
-        } catch (const std::exception &error) {
-            show_appearance_result(QString::fromUtf8(error.what()), true);
-        }
-    });
+    connect(apply_model_, &QPushButton::clicked, this, &OrbitEditor::apply_appearance_page);
     navigation->setCurrentItem(navigation->topLevelItem(0)->child(0));
     set_input(input);
 }
@@ -649,6 +706,7 @@ void OrbitEditor::set_input(const OrbitInput &input) {
     propagator_kind_ = input.propagator;
     hpop_ = input.hpop;
     mission_ = input.mission;
+    hpop_initialized_ = uses_hpop() || hpop_ != core::HpopOptions{};
     manual_state_ = input.initial;
     tle_text_->setPlainText(QString::fromStdString(
         input.tle.line1 + (input.tle.line1.empty() ? "" : "\n") + input.tle.line2));
@@ -695,7 +753,7 @@ core::CartesianState OrbitEditor::read_state() const {
             {epoch_->epoch(), elements_[0]->value(Unit::metre), elements_[1]->value(Unit::one),
              elements_[2]->value(Unit::radian), elements_[3]->value(Unit::radian),
              elements_[4]->value(Unit::radian), elements_[5]->value(Unit::radian)},
-            uses_hpop() ? core::GravitationalParameter{core::egm96_mu}
+            uses_hpop() ? core::GravitationalParameter{hpop_.gravity_mu}
                         : core::central_body(body_).mu);
     }
     core::CartesianState state{epoch_->epoch(), body_, input_frame_, {}, {}};
@@ -733,9 +791,9 @@ void OrbitEditor::write_elements(const core::CartesianState &state) {
                   elements.inclination_rad,           elements.raan_rad,
                   elements.argument_of_periapsis_rad, elements.mean_anomaly_rad};
     } else {
-        const auto elements =
-            runtime::to_keplerian(state, uses_hpop() ? core::GravitationalParameter{core::egm96_mu}
-                                                     : core::central_body(body_).mu);
+        const auto elements = runtime::to_keplerian(
+            state, uses_hpop() ? core::GravitationalParameter{hpop_.gravity_mu}
+                               : core::central_body(body_).mu);
         values = {elements.semi_major_axis_m,         elements.eccentricity,
                   elements.inclination_rad,           elements.raan_rad,
                   elements.argument_of_periapsis_rad, elements.true_anomaly_rad};
@@ -816,6 +874,10 @@ void OrbitEditor::set_propagator(OrbitPropagator propagator) {
         if (propagator == OrbitPropagator::sgp4)
             manual_state_ = state;
         propagator_kind_ = propagator;
+        if (propagator == OrbitPropagator::hpop && !hpop_initialized_) {
+            hpop_ = new_hpop_options();
+            hpop_initialized_ = true;
+        }
         if (propagator == OrbitPropagator::mission && mission_.segments.empty()) {
             const double seconds = last_->epoch().seconds_since(state.epoch);
             if (seconds > 0 && seconds <= core::hpop_max_duration_seconds)
@@ -849,9 +911,24 @@ void OrbitEditor::update_state_labels() {
     hpop_summary_->setText(
         (hpop_.gravity_degree == 0
              ? QStringLiteral("点质量")
-             : QStringLiteral("EGM96 %1 × %2").arg(hpop_.gravity_degree).arg(hpop_.gravity_order)) +
-        (hpop_.integrator == core::HpopIntegrator::rkf78 ? QStringLiteral(" · RKF78 自适应")
-                                                         : QStringLiteral(" · RK4 固定步长")));
+             : QStringLiteral("%1 %2 × %3")
+                   .arg(hpop_.gravity_model.empty() ? QStringLiteral("EGM96 内置")
+                                                    : QString::fromStdString(hpop_.gravity_model))
+                   .arg(hpop_.gravity_degree)
+                   .arg(hpop_.gravity_order)) +
+        (hpop_.uses_third_bodies()
+             ? QStringLiteral(" + %1 个第三体").arg(hpop_.enabled_third_bodies().size())
+             : QString{}) +
+        (hpop_.srp.enabled ? QStringLiteral(" + 太阳辐射压") : QString{}) +
+        (hpop_.drag.enabled ? QStringLiteral(" + 大气阻力") : QString{}) +
+        (hpop_.integrator == core::HpopIntegrator::rkf78   ? QStringLiteral(" · RKF 7(8)")
+         : hpop_.integrator == core::HpopIntegrator::rkv89 ? QStringLiteral(" · RKV 8(9) Efficient")
+         : hpop_.integrator == core::HpopIntegrator::bulirsch_stoer
+             ? QStringLiteral(" · Bulirsch–Stoer")
+         : hpop_.integrator == core::HpopIntegrator::gauss_jackson
+             ? QStringLiteral(" · Gauss–Jackson 12")
+             : QStringLiteral(" · RK4")) +
+        (hpop_.uses_fixed_step() ? QStringLiteral(" 固定步长") : QStringLiteral(" 相对误差")));
     if (propagator_kind_ == OrbitPropagator::mission) {
         model_button_->setText(QStringLiteral("规划…"));
         model_button_->setToolTip(QStringLiteral("编辑滑行与脉冲机动序列"));
@@ -945,7 +1022,13 @@ void OrbitEditor::open_propagator_details() {
     if (propagator_kind_ == OrbitPropagator::mission) {
         try {
             const auto state = read_state();
-            if (edit_mission(mission_, hpop_, state.epoch, first_->epoch(), last_->epoch(), this)) {
+            if (edit_mission(mission_, hpop_, state.epoch, first_->epoch(), last_->epoch(), this,
+                             gravity_models ? gravity_models()
+                                            : std::vector<runtime::CatalogGravity>{},
+                             ephemerides ? ephemerides() : std::vector<runtime::CatalogEphemeris>{},
+                             manage_ephemerides, data_catalog, !hpop_initialized_)) {
+                hpop_initialized_ =
+                    hpop_initialized_ || uses_hpop() || hpop_ != core::HpopOptions{};
                 if (state_mode_index_ == 1)
                     write_elements(state);
                 update_state_labels();
@@ -956,7 +1039,11 @@ void OrbitEditor::open_propagator_details() {
         return;
     }
     if (propagator_kind_ == OrbitPropagator::hpop) {
-        if (edit_hpop_settings(hpop_, this))
+        if (edit_hpop_settings(
+                hpop_, this,
+                gravity_models ? gravity_models() : std::vector<runtime::CatalogGravity>{},
+                ephemerides ? ephemerides() : std::vector<runtime::CatalogEphemeris>{},
+                manage_ephemerides, data_catalog))
             update_state_labels();
         return;
     }
@@ -969,10 +1056,10 @@ void OrbitEditor::open_propagator_details() {
         dialog.setWindowTitle(propagator_->currentText() + QStringLiteral(" · 模型信息"));
         dialog.setMinimumWidth(400);
         auto *layout = new QVBoxLayout(&dialog);
-        layout->setContentsMargins(20, 18, 20, 16);
-        layout->setSpacing(14);
+        layout->setContentsMargins(theme::space::page);
+        layout->setSpacing(12);
         auto *form = new QFormLayout;
-        form->setHorizontalSpacing(18);
+        form->setHorizontalSpacing(16);
         form->setVerticalSpacing(10);
         const auto row = [&](const QString &label, const QString &value) {
             auto *text = new QLabel(value);
@@ -1021,9 +1108,10 @@ void OrbitEditor::open_propagator_details() {
 void OrbitEditor::set_create_mode(bool create) {
     create_mode_ = create;
     object_->setReadOnly(!create);
-    apply_->setText(create ? QStringLiteral("插入卫星") : QStringLiteral("应用轨道"));
+    apply_->setText(create ? QStringLiteral("插入卫星") : QStringLiteral("应用"));
     navigation_->setCurrentItem(navigation_->topLevelItem(0)->child(0));
     compact_navigation_->setEnabled(!create);
+    page_tabs_->setEnabled(!create);
     for (int i = 0; i < navigation_->topLevelItemCount(); ++i)
         for (int j = 0; j < navigation_->topLevelItem(i)->childCount(); ++j) {
             auto *item = navigation_->topLevelItem(i)->child(j);
@@ -1070,19 +1158,44 @@ void OrbitEditor::set_busy(bool busy) {
         show_result(QStringLiteral("正在计算…"));
 }
 void OrbitEditor::show_result(const QString &message, bool error) {
-    message_->setStyleSheet(error ? "color: #efb0a9; font-size: 12px"
-                                  : "color: #a1aec7; font-size: 12px");
+    restyle_message(message_, error);
     message_->setText(message);
     message_->setVisible(!message.isEmpty());
 }
 void OrbitEditor::configure_appearance(int kind, const QString &path, double diameter_km) {
     set_appearance(kind, path, diameter_km);
-    apply_model_->click();
+    // Explicit configuration always reaches the workbench, even when unchanged.
+    applied_model_kind_ = -1;
+    apply_appearance_page();
 }
 void OrbitEditor::set_appearance(int kind, const QString &path, double diameter_km) {
     model_kind_->setCurrentIndex(kind);
     model_path_->setText(path);
     model_diameter_->set_value(diameter_km, Unit::kilometre);
+    applied_model_kind_ = kind;
+    applied_model_path_ = path;
+    applied_model_diameter_km_ = diameter_km;
+}
+// Applies the 3D page: the track switch through the display settings, and the model only
+// when it changed, so an unchanged appearance does not rebuild the model.
+void OrbitEditor::apply_appearance_page() {
+    if (track_3d_->isChecked() != applied_track_3d_)
+        submit_display();
+    try {
+        const int kind = model_kind_->currentIndex();
+        const auto path = model_path_->text();
+        const double diameter = model_diameter_->value(Unit::kilometre);
+        if (kind == applied_model_kind_ && path == applied_model_path_ &&
+            diameter == applied_model_diameter_km_)
+            return;
+        if (appearance)
+            appearance(kind, path, diameter);
+        applied_model_kind_ = kind;
+        applied_model_path_ = path;
+        applied_model_diameter_km_ = diameter;
+    } catch (const std::exception &error) {
+        show_appearance_result(QString::fromUtf8(error.what()), true);
+    }
 }
 void OrbitEditor::set_appearance_busy(bool busy) {
     model_busy_ = busy;
@@ -1101,8 +1214,7 @@ void OrbitEditor::refresh_enabled() {
     apply_model_->setEnabled(idle && !create_mode_);
 }
 void OrbitEditor::show_appearance_result(const QString &message, bool error) {
-    model_message_->setStyleSheet(error ? "color: #efb0a9; font-size: 12px"
-                                        : "color: #a1aec7; font-size: 12px");
+    restyle_message(model_message_, error);
     model_message_->setText(message);
     model_message_->setVisible(!message.isEmpty());
 }
@@ -1114,6 +1226,7 @@ void OrbitEditor::set_display(const DisplaySettings &settings) {
     track_2d_->setChecked(settings.track_2d);
     label_2d_->setChecked(settings.labels_2d);
     track_3d_->setChecked(settings.track_3d);
+    applied_track_3d_ = settings.track_3d;
 }
 void OrbitEditor::submit_display() {
     try {
@@ -1123,6 +1236,7 @@ void OrbitEditor::submit_display() {
                                      label_2d_->isChecked(),        track_3d_->isChecked()};
             track_style_->write_settings(settings);
             display(settings);
+            applied_track_3d_ = settings.track_3d;
         }
         for (auto *error : display_messages_)
             error->hide();

@@ -12,6 +12,34 @@
 namespace orbitforge::runtime {
 enum class DataAcquisition { unknown, bundled, imported, downloaded };
 enum class EopProduct { c04, finals2000a };
+struct CatalogGravity {
+    std::string selection;
+    core::GravityInfo info;
+    std::filesystem::path file;
+    DataAcquisition acquisition = DataAcquisition::unknown;
+    std::int64_t acquired_at_unix_seconds = 0;
+};
+struct CatalogEphemeris {
+    std::string selection;
+    core::ThirdBodyDataInfo info;
+    std::filesystem::path manifest;
+    DataAcquisition acquisition = DataAcquisition::unknown;
+    std::int64_t acquired_at_unix_seconds = 0;
+};
+struct CatalogSpaceWeather {
+    std::string selection;
+    core::SpaceWeatherInfo info;
+    std::filesystem::path file;
+    DataAcquisition acquisition = DataAcquisition::unknown;
+    std::int64_t acquired_at_unix_seconds = 0;
+};
+struct CatalogOceanTides {
+    std::string selection;
+    core::OceanTideInfo info;
+    std::filesystem::path file;
+    DataAcquisition acquisition = DataAcquisition::unknown;
+    std::int64_t acquired_at_unix_seconds = 0;
+};
 struct CatalogSnapshot {
     std::string lock_sha256;
     std::string snapshot_id;
@@ -31,6 +59,55 @@ class DataCatalog {
     DataCatalog(const DataCatalog &) = delete;
     DataCatalog &operator=(const DataCatalog &) = delete;
     [[nodiscard]] const std::filesystem::path &root() const noexcept;
+    // Validate the complete file before atomically replacing this model's current receipt.
+    // Static fields have no expiry. Failed/cancelled installs retain the previous selection.
+    CatalogGravity install_gravity(const std::filesystem::path &source,
+                                   const std::string &selection, const std::string &source_url = {},
+                                   DataAcquisition acquisition = DataAcquisition::imported,
+                                   const std::function<void()> &checkpoint = {});
+    [[nodiscard]] std::vector<CatalogGravity> gravity_models() const;
+    [[nodiscard]] std::shared_ptr<const core::GravityModel>
+    load_gravity(const std::string &selection) const;
+    // Install the complete pinned DE440s SPK with owned uniform-time constants.
+    CatalogEphemeris install_de440s(const std::filesystem::path &spk,
+                                    DataAcquisition acquisition = DataAcquisition::imported,
+                                    const std::function<void()> &checkpoint = {});
+    // Import an explicit DE440s-based snapshot (including validated per-planet
+    // supplements). Owned copies and atomic publication; no implicit download.
+    CatalogEphemeris
+    install_ephemeris_snapshot(const std::filesystem::path &manifest,
+                               DataAcquisition acquisition = DataAcquisition::imported,
+                               const std::function<void()> &checkpoint = {});
+    // Augment the installed DE440s snapshot from a binary SPK (up to 2 GiB).
+    // Retain only 499..999 physical-centre segments in J2000 relative to each
+    // planet's own barycentre; replace only the imported planets. Other segments
+    // cannot override Sun/Earth/Moon or planetary-system gravity. Body coverage
+    // is checked for the requested propagation interval, independently of base DE.
+    CatalogEphemeris
+    install_planetary_centres(const std::filesystem::path &source,
+                              const std::string &source_url = {},
+                              DataAcquisition acquisition = DataAcquisition::imported,
+                              const std::function<void()> &checkpoint = {});
+    [[nodiscard]] std::vector<CatalogEphemeris> ephemerides() const;
+    [[nodiscard]] std::shared_ptr<const core::IThirdBodyEphemeris>
+    load_ephemeris(const std::string &selection) const;
+    CatalogSpaceWeather install_space_weather(
+        const std::filesystem::path &source, const std::string &selection = "celestrak",
+        const std::string &source_url = {}, DataAcquisition acquisition = DataAcquisition::imported,
+        const std::function<void()> &checkpoint = {});
+    [[nodiscard]] std::vector<CatalogSpaceWeather> weather_sources() const;
+    [[nodiscard]] std::shared_ptr<const core::SpaceWeather>
+    load_space_weather(const std::string &selection) const;
+    // FES normalized potential file. The official fes2014bv1 ID requires the pinned
+    // original bytes; custom models use another ID. Atomic, cancellable publication.
+    CatalogOceanTides install_ocean_tides(const std::filesystem::path &source,
+                                          const std::string &selection = "fes2014bv1",
+                                          const std::string &source_url = {},
+                                          DataAcquisition acquisition = DataAcquisition::imported,
+                                          const std::function<void()> &checkpoint = {});
+    [[nodiscard]] std::vector<CatalogOceanTides> ocean_tide_models() const;
+    [[nodiscard]] std::shared_ptr<const core::OceanTideModel>
+    load_ocean_tides(const std::string &selection) const;
     // Reads a coherent local catalog view; never downloads or changes current pointers.
     // Full coverage wins over extrapolation, then preferred_eop() orders the sources.
     [[nodiscard]] DataSnapshot snapshot(core::Epoch first, core::Epoch last,
@@ -69,6 +146,10 @@ class DataCatalog {
     void set_settings(const std::map<std::string, std::string> &values);
 
   private:
+    CatalogEphemeris install_ephemeris_snapshot_checked(const std::filesystem::path &manifest,
+                                                        DataAcquisition acquisition,
+                                                        const std::function<void()> &checkpoint,
+                                                        const std::string &expected_receipt);
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

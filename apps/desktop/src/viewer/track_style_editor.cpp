@@ -1,9 +1,10 @@
 #include "track_style_editor.hpp"
 #include "responsive_layout.hpp"
+#include "workbench_theme.hpp"
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDoubleSpinBox>
-#include <QGridLayout>
+#include <QFormLayout>
 #include <QLabel>
 #include <QPainter>
 #include <QPainterPath>
@@ -28,8 +29,8 @@ class LineWidthSpinBox final : public QDoubleSpinBox {
             const QPointF center = QRectF(box).center();
             const bool enabled =
                 isEnabled() && (stepEnabled() & (up ? StepUpEnabled : StepDownEnabled));
-            painter.setPen(QPen(QColor(enabled ? "#aebdd5" : "#56657b"), 1.3, Qt::SolidLine,
-                                Qt::RoundCap, Qt::RoundJoin));
+            painter.setPen(QPen(theme::color(enabled ? theme::text_soft : theme::text_faint), 1.3,
+                                Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
             const double direction = up ? 1 : -1;
             painter.drawPolyline(QPolygonF{center + QPointF(-3, direction * 1.5),
                                            center + QPointF(0, -direction * 1.5),
@@ -48,10 +49,10 @@ class Preview final : public QWidget {
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
-        p.setPen(QPen(QColor("#303b51"), 1));
-        p.setBrush(QColor("#171f2e"));
+        p.setPen(QPen(theme::color(theme::border), 1));
+        p.setBrush(theme::color(theme::field));
         p.drawRoundedRect(QRectF(rect()).adjusted(.5, .5, -.5, -.5), 8, 8);
-        p.setPen(QColor("#8d9db7"));
+        p.setPen(theme::color(theme::text_muted));
         p.drawText(QRect(16, 10, width() - 32, 20), Qt::AlignLeft, QStringLiteral("预览"));
         QPainterPath path;
         path.moveTo(20, 65);
@@ -60,7 +61,7 @@ class Preview final : public QWidget {
         p.setPen(track_pen(color, settings.line_width, settings.line_style));
         p.setBrush(Qt::NoBrush);
         p.drawPath(path);
-        p.setPen(QPen(QColor("#171f2e"), 2));
+        p.setPen(QPen(theme::color(theme::field), 2));
         p.setBrush(color);
         p.drawEllipse(path.pointAtPercent(.66), 4.5, 4.5);
     }
@@ -70,46 +71,54 @@ TrackStyleEditor::TrackStyleEditor(QWidget *parent) : QWidget(parent) {
     setObjectName("trackStyleEditor");
     // Let the viewport allocate a narrow width before the controls reflow.
     setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    auto *layout = new QGridLayout(this);
+    // Side labels like every other property form; narrow windows stack them above.
+    auto *layout = new QFormLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setHorizontalSpacing(16);
-    layout->setVerticalSpacing(12);
+    layout->setHorizontalSpacing(theme::space::md);
+    layout->setVerticalSpacing(theme::space::row);
+    layout->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    layout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     preview_ = new Preview(this);
-    layout->addWidget(preview_, 0, 0, 1, 2);
-    layout->addWidget(new QLabel(QStringLiteral("颜色")), 1, 0, 1, 2);
+    layout->addRow(preview_);
     auto *palette = new QHBoxLayout;
-    palette->setSpacing(8);
+    palette->setSpacing(6);
     const std::array colors{"#73cdee", "#a9a1ee", "#e9a2ba", "#edbb7a", "#87d4b1", "#e4eaf5"};
     const std::array names{QStringLiteral("浅蓝"), QStringLiteral("淡紫"), QStringLiteral("樱粉"),
                            QStringLiteral("暖金"), QStringLiteral("薄荷"), QStringLiteral("月白")};
     for (std::size_t i = 0; i < colors.size(); ++i) {
         auto *swatch = new QToolButton;
         swatch->setObjectName(QStringLiteral("trackColor%1").arg(i));
-        swatch->setFixedSize(28, 28);
+        swatch->setFixedSize(22, 22);
         swatch->setCheckable(true);
         swatch->setAccessibleName(names[i]);
         swatch->setToolTip(names[i]);
         swatch->setProperty("rgb", QColor(colors[i]));
         swatch->setStyleSheet(
             QStringLiteral(
-                "QToolButton { background: %1; border: 3px solid #1b2333; border-radius: 7px; }"
-                "QToolButton:hover { border-color: #70829c; }"
-                "QToolButton:checked, QToolButton:focus { border-color: #e2e7ff; }")
-                .arg(colors[i]));
+                "QToolButton { background: %1; border: 2px solid %2; border-radius: 11px; }"
+                "QToolButton:hover { border-color: %3; }"
+                "QToolButton:checked, QToolButton:focus { border-color: %4; }")
+                .arg(colors[i], theme::color(theme::surface).name(),
+                     theme::color(theme::border_strong).name(),
+                     theme::color(theme::accent_bright).name()));
         connect(swatch, &QToolButton::clicked, this,
                 [this, swatch] { set_color(swatch->property("rgb").value<QColor>()); });
         palette->addWidget(swatch);
         swatches_.push_back(swatch);
     }
-    palette->addStretch();
+    // One row that fits narrow property windows: round swatches, then a compact chip
+    // showing the current colour and its hex value, which opens the custom picker.
+    palette->addSpacing(4);
     auto *color_row = new QHBoxLayout;
-    color_row->addLayout(palette, 1);
+    color_row->setSpacing(0);
+    color_row->addLayout(palette);
     custom_ = new QPushButton;
     custom_->setObjectName("trackCustomColor");
-    custom_->setMinimumWidth(124);
+    custom_->setIconSize(QSize(12, 12));
     custom_->setToolTip(QStringLiteral("选择自定义颜色"));
     custom_->setAccessibleName(QStringLiteral("自定义轨迹颜色"));
-    color_row->addWidget(custom_, 0, Qt::AlignLeft);
+    color_row->addWidget(custom_, 0, Qt::AlignVCenter);
+    color_row->addStretch(1);
     connect(custom_, &QPushButton::clicked, this, [this] {
         QColorDialog dialog(color_, this);
         dialog.setObjectName("trackColorDialog");
@@ -118,12 +127,7 @@ TrackStyleEditor::TrackStyleEditor(QWidget *parent) : QWidget(parent) {
         if (dialog.exec() == QDialog::Accepted)
             set_color(dialog.selectedColor());
     });
-    layout->addLayout(color_row, 2, 0, 1, 2);
-    responsive_columns(this, color_row, 400);
-    auto *style_label = new QLabel(QStringLiteral("线型"));
-    auto *width_label = new QLabel(QStringLiteral("粗细"));
-    layout->addWidget(style_label, 3, 0);
-    layout->addWidget(width_label, 3, 1);
+    layout->addRow(QStringLiteral("颜色"), color_row);
     style_ = new QComboBox;
     style_->setObjectName("trackLineStyle");
     style_->setIconSize(QSize(64, 18));
@@ -135,7 +139,8 @@ TrackStyleEditor::TrackStyleEditor(QWidget *parent) : QWidget(parent) {
         icon.fill(Qt::transparent);
         QPainter p(&icon);
         p.setRenderHint(QPainter::Antialiasing);
-        p.setPen(track_pen(QColor("#c9d4ea"), 1.5, static_cast<application::LineStyle>(i)));
+        p.setPen(
+            track_pen(theme::color(theme::text_soft), 1.5, static_cast<application::LineStyle>(i)));
         p.drawLine(QPointF(2, 9), QPointF(62, 9));
         p.end();
         style_->addItem(QIcon(icon), styles[i], static_cast<int>(i));
@@ -150,27 +155,11 @@ TrackStyleEditor::TrackStyleEditor(QWidget *parent) : QWidget(parent) {
     width_->setSuffix(QStringLiteral(" px"));
     width_->setToolTip(QStringLiteral("屏幕逻辑像素；缩放视图时保持粗细。"));
     width_->setKeyboardTracking(false);
-    style_label->setBuddy(style_);
-    width_label->setBuddy(width_);
-    layout->addWidget(style_, 4, 0);
-    layout->addWidget(width_, 4, 1);
-    layout->setColumnStretch(0, 3);
-    layout->setColumnStretch(1, 2);
-    new WidthObserver(this, [layout, style_label, width_label, this, mode = WidthMode{},
-                             previous = false](int width) mutable {
-        const bool narrow = mode.narrow(width, 360);
-        if (narrow == previous)
-            return;
-        previous = narrow;
-        for (auto *widget :
-             {static_cast<QWidget *>(style_label), static_cast<QWidget *>(width_label),
-              static_cast<QWidget *>(style_), static_cast<QWidget *>(width_)})
-            layout->removeWidget(widget);
-        layout->addWidget(style_label, 3, 0, 1, narrow ? 2 : 1);
-        layout->addWidget(style_, 4, 0, 1, narrow ? 2 : 1);
-        layout->addWidget(width_label, narrow ? 5 : 3, narrow ? 0 : 1, 1, narrow ? 2 : 1);
-        layout->addWidget(width_, narrow ? 6 : 4, narrow ? 0 : 1, 1, narrow ? 2 : 1);
-    });
+    style_->setMaximumWidth(276);
+    width_->setMaximumWidth(160);
+    layout->addRow(QStringLiteral("线型"), style_);
+    layout->addRow(QStringLiteral("粗细"), width_);
+    responsive_form(layout, 340);
     connect(style_, &QComboBox::currentIndexChanged, this, [this] { refresh_preview(); });
     connect(width_, &QDoubleSpinBox::valueChanged, this, [this] { refresh_preview(); });
     set_settings({});
@@ -179,7 +168,17 @@ void TrackStyleEditor::set_color(QColor color) {
     if (!color.isValid())
         return;
     color_ = color;
-    custom_->setText(color.name().toUpper() + QStringLiteral("  …"));
+    custom_->setText(color.name().toUpper());
+    QPixmap dot(QSize(12, 12) * custom_->devicePixelRatioF());
+    dot.setDevicePixelRatio(custom_->devicePixelRatioF());
+    dot.fill(Qt::transparent);
+    QPainter painter(&dot);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(theme::color(theme::border_strong), 1));
+    painter.setBrush(color);
+    painter.drawEllipse(QRectF(0.5, 0.5, 11, 11));
+    painter.end();
+    custom_->setIcon(QIcon(dot));
     for (auto *swatch : swatches_)
         swatch->setChecked(swatch->property("rgb").value<QColor>() == color);
     refresh_preview();

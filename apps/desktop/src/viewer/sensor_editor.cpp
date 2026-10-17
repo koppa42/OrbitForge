@@ -1,6 +1,7 @@
 #include "sensor_editor.hpp"
 #include "object_selection.hpp"
 #include "quantity_editor.hpp"
+#include "responsive_layout.hpp"
 #include "workbench_style.hpp"
 #include <QButtonGroup>
 #include <QLabel>
@@ -66,7 +67,7 @@ class SensorAnglePreview final : public QWidget {
         painter.setRenderHint(QPainter::Antialiasing);
         const QPointF apex(width() / 2.0, 20);
         constexpr double radius = 64;
-        painter.setPen(QPen(QColor("#476072"), 1, Qt::DashLine));
+        painter.setPen(QPen(theme::color(theme::border_strong), 1, Qt::DashLine));
         painter.drawLine(apex, QPointF(apex.x(), 87));
         if (degrees_) {
             // Fit a true-angle sector even for a 90-degree half-angle.
@@ -78,18 +79,18 @@ class SensorAnglePreview final : public QWidget {
             cone.arcTo(QRectF(apex.x() - length, apex.y() - length, length * 2, length * 2),
                        -90 + *degrees_, -*degrees_ * 2);
             cone.closeSubpath();
-            painter.setPen(QPen(QColor("#89c9e6"), 1.3));
-            painter.setBrush(QColor(100, 190, 224, 32));
+            painter.setPen(QPen(theme::color(theme::accent), 1.3));
+            painter.setBrush(theme::color(theme::accent, 32));
             painter.drawPath(cone);
             painter.setBrush(Qt::NoBrush);
-            painter.setPen(QPen(QColor("#dbadc6"), 1.5));
+            painter.setPen(QPen(theme::color(theme::sakura), 1.5));
             painter.drawArc(QRectF(apex.x() - 25, apex.y() - 25, 50, 50), -90 * 16,
                             qRound(*degrees_ * 16));
         }
         painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor("#c3e4f3"));
+        painter.setBrush(theme::color(theme::accent_bright));
         painter.drawEllipse(apex, 3, 3);
-        painter.setPen(QColor("#8fa7b9"));
+        painter.setPen(theme::color(theme::text_muted));
         auto font = painter.font();
         font.setPixelSize(10);
         painter.setFont(font);
@@ -119,8 +120,14 @@ SensorEditor::SensorEditor(QWidget *parent) : QDialog(parent) {
     body->setObjectName("sensorFields");
     body->setMaximumWidth(660);
     auto *layout = new QVBoxLayout(body);
-    layout->setContentsMargins(16, 20, 16, 20);
-    layout->setSpacing(20);
+    layout->setContentsMargins(theme::space::page);
+    layout->setSpacing(theme::space::lg);
+    // Sensor editors often live in narrow side panes; the side margins tighten there.
+    new WidthObserver(this, [layout, mode = WidthMode{}](int width) mutable {
+        const auto margins = theme::space::page;
+        layout->setContentsMargins(
+            mode.narrow(width, 480) ? QMargins(16, margins.top(), 16, margins.bottom()) : margins);
+    });
 
     auto *heading = new QHBoxLayout;
     heading->setSpacing(12);
@@ -128,7 +135,7 @@ SensorEditor::SensorEditor(QWidget *parent) : QDialog(parent) {
     icon->setObjectName("sensorBadge");
     icon->setFixedSize(40, 40);
     icon->setAlignment(Qt::AlignCenter);
-    icon->setPixmap(workbench_icon(WorkbenchIcon::focus, QColor("#a8d9ee"))
+    icon->setPixmap(workbench_icon(WorkbenchIcon::focus, theme::color(theme::accent))
                         .pixmap(QSize(24, 24), devicePixelRatioF()));
     auto *heading_text = new QVBoxLayout;
     heading_text->setSpacing(4);
@@ -145,7 +152,7 @@ SensorEditor::SensorEditor(QWidget *parent) : QDialog(parent) {
     auto *parent_row = new QFrame(body);
     parent_row->setObjectName("sensorParent");
     auto *parent_layout = new QHBoxLayout(parent_row);
-    parent_layout->setContentsMargins(10, 9, 10, 9);
+    parent_layout->setContentsMargins(theme::space::card);
     parent_layout->setSpacing(8);
     auto *parent_icon = new QLabel(parent_row);
     parent_icon->setPixmap(
@@ -175,7 +182,7 @@ SensorEditor::SensorEditor(QWidget *parent) : QDialog(parent) {
     auto *fov = new QFrame(body);
     fov->setObjectName("sensorFov");
     auto *fov_layout = new QHBoxLayout(fov);
-    fov_layout->setContentsMargins(12, 12, 12, 12);
+    fov_layout->setContentsMargins(16, 16, 16, 16);
     fov_layout->setSpacing(8);
     auto *angle_fields = new QVBoxLayout;
     angle_fields->setSpacing(8);
@@ -252,7 +259,7 @@ SensorEditor::SensorEditor(QWidget *parent) : QDialog(parent) {
     auto *footer = new QFrame(this);
     footer->setObjectName("sensorFooter");
     auto *footer_layout = new QVBoxLayout(footer);
-    footer_layout->setContentsMargins(16, 12, 16, 14);
+    footer_layout->setContentsMargins(theme::space::footer);
     footer_layout->setSpacing(10);
     error_ = new QLabel(footer);
     error_->setObjectName("sensorError");
@@ -321,7 +328,7 @@ void SensorEditor::set_sensor(application::ProjectSensor sensor,
     else
         throw std::invalid_argument("不支持的传感器指向方式。");
     title_->setText(creating ? QStringLiteral("插入传感器") : QStringLiteral("传感器属性"));
-    apply_->setText(creating ? QStringLiteral("插入传感器") : QStringLiteral("应用更改"));
+    apply_->setText(creating ? QStringLiteral("插入传感器") : QStringLiteral("应用"));
     close_->setText(creating ? QStringLiteral("取消") : QStringLiteral("关闭"));
     setWindowTitle(creating
                        ? QStringLiteral("插入传感器")

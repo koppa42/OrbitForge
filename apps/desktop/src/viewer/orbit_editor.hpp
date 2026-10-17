@@ -4,11 +4,13 @@
 #include <QWidget>
 #include <functional>
 #include <orbitforge/core/time/time_provider.hpp>
+#include <orbitforge/runtime/data_catalog.hpp>
 
 class QLabel;
 class QLineEdit;
 class QPushButton;
 class QComboBox;
+class QTabBar;
 class QCheckBox;
 class QTreeWidget;
 class QStackedWidget;
@@ -17,12 +19,16 @@ namespace orbitforge::desktop {
 class EpochEditor;
 class QuantityEditor;
 class TrackStyleEditor;
+class EopCatalog;
 class OrbitEditor final : public QWidget {
   public:
     explicit OrbitEditor(const OrbitInput &input, QWidget *parent = nullptr);
     void set_time_provider(std::shared_ptr<const core::ITimeProvider> time);
     std::function<void(OrbitInput)> apply;
     std::function<void()> cancel;
+    std::function<std::vector<runtime::CatalogGravity>()> gravity_models;
+    std::function<std::vector<runtime::CatalogEphemeris>()> ephemerides, manage_ephemerides;
+    EopCatalog *data_catalog = nullptr;
     std::function<void()> close_requested;
     std::function<void(int, QString, double)> appearance;
     std::function<void(DisplaySettings)> display;
@@ -59,6 +65,7 @@ class OrbitEditor final : public QWidget {
     core::FrameId input_frame_ = core::FrameId::gcrf;
     OrbitPropagator propagator_kind_ = OrbitPropagator::two_body;
     core::HpopOptions hpop_;
+    bool hpop_initialized_ = false;
     core::MissionPlan mission_;
     [[nodiscard]] bool uses_hpop() const {
         return propagator_kind_ == OrbitPropagator::hpop ||
@@ -70,6 +77,7 @@ class OrbitEditor final : public QWidget {
     bool create_mode_ = false, orbit_busy_ = false, model_busy_ = false;
     QTreeWidget *navigation_ = nullptr;
     QComboBox *compact_navigation_ = nullptr;
+    QTabBar *page_tabs_ = nullptr;
     QLineEdit *object_ = nullptr;
     QComboBox *propagator_ = nullptr, *reference_frame_ = nullptr;
     QLabel *anomaly_label_ = nullptr, *state_title_ = nullptr;
@@ -88,6 +96,12 @@ class OrbitEditor final : public QWidget {
     QLineEdit *model_path_ = nullptr;
     QuantityEditor *model_diameter_ = nullptr;
     QPushButton *apply_model_ = nullptr;
+    // Last values handed to the workbench; the 3D page's single Apply submits only changes.
+    bool applied_track_3d_ = true;
+    int applied_model_kind_ = 0;
+    QString applied_model_path_;
+    double applied_model_diameter_km_ = 1000;
+    void apply_appearance_page();
     QLabel *model_message_ = nullptr;
     QComboBox *track_extent_ = nullptr;
     TrackStyleEditor *track_style_ = nullptr;

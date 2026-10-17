@@ -30,7 +30,7 @@ project.objects.remove(sat)
 original = analysis.state(sat, at=of.Epoch(0))
 ```
 
-状态包含历元、地心原点、参考系、米和米每秒数值。二体、J2、J4、SGP4 和 HPOP 复用共用传播器；地面站使用 WGS84 固定 ITRF 模型。当前 `state()` / `states()` 接受卫星和地面站；需要传感器位置时，调用方应传入其父卫星引用，直接传传感器会报能力错误。GCRF 是 Python 查询的显式默认值，SGP4 原生输出为 TEME，地面站原生输出为 ITRF；跨参考系查询必须准备 EOP 数据，HPOP 的非中心引力在 GCRF 查询中也依赖 EOP，绝不把 TEME 当成 GCRF。
+状态包含历元、地心原点、参考系、米和米每秒数值。二体、J2、J4、SGP4 和 HPOP 复用共用传播器；HPOP 与任务 HPOP 滑行使用[有界科学插值星历](orbit_interpolation.md)，准备时捕获资源，首次查询时生成所需完整滑行段；地面站使用 WGS84 固定 ITRF 模型。当前 `state()` / `states()` 接受卫星和地面站；需要传感器位置时，调用方应传入其父卫星引用，直接传传感器会报能力错误。GCRF 是 Python 查询的显式默认值，SGP4 原生输出为 TEME，地面站原生输出为 ITRF；跨参考系查询必须准备 EOP 数据，HPOP 的非中心引力在 GCRF 查询中也依赖 EOP，绝不把 TEME 当成 GCRF。
 
 | 参数或行为 | 约定 |
 | --- | --- |
@@ -125,13 +125,13 @@ except of.DataChangedError as error:
     restored = plan.open(accept_data_changes=True)
 ```
 
-`save(..., analysis=analysis)` 保存当前已提交输入、样式和报告定义，同时记录该分析固定的 UTC / EOP 来源与策略、整个项目的物理输入哈希和数据锁哈希。它不保存结果缓存，也不声称已经执行过所有查询。分析必须属于这个项目，且物理输入仍一致；允许改名、调整样式、显示步长、播放时间和报告配置。修改轨道、分析区间、站点坐标或最低仰角、传感器视场或引用关系后，保存旧分析抛出 `RevisionConflictError`。同稳定 ID 的另一个项目也不能借用该分析。
+`save(..., analysis=analysis)` 保存当前已提交输入、样式和报告定义，同时记录该分析固定的 UTC / EOP 来源与策略、整个项目的物理输入哈希和数据锁哈希。它不保存结果缓存，也不声称已经执行过所有查询。分析必须属于这个项目，且物理输入仍一致；允许改名、调整样式、播放时间和报告配置；仅用于显示的轨道步长也可改变。启用 HPOP 固定星历输出后，轨道步长属于物理计算输入。修改轨道、分析区间、站点坐标或最低仰角、传感器视场或引用关系后，保存旧分析抛出 `RevisionConflictError`。同稳定 ID 的另一个项目也不能借用该分析。
 
 `project.analysis_record` 返回只读的准备记录；`project.analysis_status` 为 `UNRECORDED`、`CURRENT` 或 `STALE`，由记录与当前输入、数据身份比较得出。输入哈希使用独立的 `orbitforge-analysis-input-v1` 编码，不等同于单对象轨迹的输入哈希。裸 `save(path)` 只保存现状，不创造准备记录，也不把过期记录改成当前；单纯 `prepare()` 仍不改写项目。更改传播模型的解释规则时须同步升级这份哈希编码的版本。
 
 文件和文档共同遵守原子发布：候选校验、项目身份与修订检查通过后写入文件，成功后才更新内存来源、修订和已保存标记并通知观察者。覆盖默认关闭。写入失败或修订冲突不修改两者；观察者在保存成功后再次编辑，项目仍正确显示未保存。
 
-开发预览阶段只读写当前 `.orbitforge` v14；所有打开入口（包括 `load_project_data()`）在解析内容前拒绝非当前版本，并给出实际与支持的版本。没有旧格式迁移或缺字段补默认值的读取路径；输入项目仍可以不包含可选的分析准备记录。详见[项目文件](project_files.md)。
+开发预览阶段只读写当前 `.orbitforge` v40；所有打开入口（包括 `load_project_data()`）在解析内容前拒绝非当前版本，并给出实际与支持的版本。没有旧格式迁移或缺字段补默认值的读取路径；输入项目仍可以不包含可选的分析准备记录。详见[项目文件](project_files.md)。
 
 `Project.plan_open(path, data=...)` 固定解析后的文件和已验证资源；`name`、`data`、`data_changes` 可供确认界面读取。直接 `Project.open()` 和 `of.load_project()` 使用同一流程。已有来源依赖必须提供相应当前数据；不传数据只适合没有 UTC / EOP 依赖的原生坐标计算项目，SGP4 仍须显式提供 UTC。需要仅检查或导入原始输入而不准备计算时，使用 `load_project_data()`，再按需 `Project.from_data()`。
 
@@ -139,7 +139,7 @@ except of.DataChangedError as error:
 
 ## 结果与导出
 
-`Trajectory` 独立持有结果，分析或项目释放后仍有效。名称和修订来自准备时的快照。`input_sha256` 记录对应对象状态输入及分析区间，排除名称、样式、无关对象及地面站最低仰角；`data_sha256` 仅记录该状态查询实际使用的依赖。未转换的二体/J2/J4、HPOP 点质量 GCRF 状态和固定站点 ITRF 状态使用空数据锁，SGP4 TEME 依赖时间表，HPOP 非中心引力及跨参考系状态依赖时间与 EOP。HPOP 的 EOP 必须同时覆盖初始历元与分析时段。
+`Trajectory` 独立持有结果，分析或项目释放后仍有效。名称和修订来自准备时的快照。`input_sha256` 记录对应对象状态输入及分析区间，排除名称、样式、无关对象及地面站最低仰角；`data_sha256` 仅记录该状态查询实际使用的依赖。未转换的二体/J2/J4、未启用第三体或光压的 HPOP 纯点质量 GCRF 状态和固定站点 ITRF 状态使用空数据锁，SGP4 TEME 依赖时间表，HPOP 非中心引力及跨参考系状态依赖时间与 EOP。HPOP 的 EOP 必须同时覆盖初始历元与分析时段；启用第三体引力或太阳光压时，无论中心引力阶次多少，都记录实际星历身份，见[光压契约](solar_radiation_pressure.md)。
 
 ```python
 len(trajectory)                              # 样本数
@@ -233,7 +233,7 @@ Python 直接接收对象句柄，不需要构造 `ReportDefinition` 或填写 I
 
 `cancelled=callable` 必须返回 bool，取消抛出 `AnalysisCancelled`；`progress(done, total)` 提供同步进度，两者均可省略。即使在完成进度回调中取消，也不返回结果；回调异常传回调用方。生成时固定报告配置，回调修改原配置或当前项目不影响本次计算。报告查询不重建传播器、不重新读取数据文件，也不写入项目的已保存报告配置。
 
-报告查询与显示已拆为 `ReportQuery` / `ReportTemplate`。Python 可传 `template=of.reports.Template([...])`，或生成后用 `template.apply(result)` 重排列、切换单位和时间系统，不重新计算。C++ 支持 `Analysis::report(query, format)` 和 `ReportResult::with_template(format)`。原始 SI 表始终保留，可恢复被隐藏的列；逐列单位优先于默认单位。详见[报告](reports.md)。项目当前为 v14（RPTS v2），保存显式选择模式及显示模板；不增加旧格式兼容路径。
+报告查询与显示已拆为 `ReportQuery` / `ReportTemplate`。Python 可传 `template=of.reports.Template([...])`，或生成后用 `template.apply(result)` 重排列、切换单位和时间系统，不重新计算。C++ 支持 `Analysis::report(query, format)` 和 `ReportResult::with_template(format)`。原始 SI 表始终保留，可恢复被隐藏的列；逐列单位优先于默认单位。详见[报告](reports.md)。项目当前为 v40（RPTS v2），保存显式选择模式及显示模板；不增加旧格式兼容路径。
 
 ## C++ 入口与验证
 
@@ -286,8 +286,22 @@ Access 由 `AnalysisAccess.*`、`AccessResults.*`、Python `test_analysis_access
 
 AER 与统一报告还由 `test_analysis_aer_reports.py` 和 `AnalysisAccess.*` 验证：九类报告与原入口数值一致、ITRF 观测及距离数值差分、精确采样、不可见样本、对象删除与源文件移除、完成回调取消、明确对象选择、可选数组转换和已安装 SDK。`access.py` 同时演示 AER 和报告入口。
 
-报告模板由 `Reports.*`、`ReportDialog.TemplateUnitsReuseResultsAndReorderedFieldsKeepPlotsAndSelection`、Python `test_report_templates.py` 和安装后的 SDK 验证；覆盖逐列单位、重排与恢复字段、显式全选、UTC 按需校验、失效输入不自动重算，以及 v14 独立二进制样本精确往返。
+报告模板由 `Reports.*`、`ReportDialog.TemplateUnitsReuseResultsAndReorderedFieldsKeepPlotsAndSelection`、Python `test_report_templates.py` 和安装后的 SDK 验证；覆盖逐列单位、重排与恢复字段、显式全选、UTC 按需校验、失效输入不自动重算，以及 v40 独立二进制样本精确往返。
 
 ### 机动记录
 
 任务序列卫星通过 `analysis.maneuvers(satellite, cancelled=...)` 返回拥有自身数据的 `ManeuverSeries`。`events` 包含段索引、名称、GCRF 机动前后状态、GCRF Δv 与累计 Δv；结果附对象、修订、算法及输入/数据哈希。非任务序列卫星返回空列表；不接受地面站或传感器。详见[任务序列](missions.md)。
+
+### 本体星历导入
+
+```python
+catalog = of.DataCatalog("local/shared-data")
+catalog.install_de440s("local/de440s.bsp")
+entry = catalog.install_planetary_centres("local/mar099s.bsp")
+# 也可导入已有完整快照：
+# entry = catalog.install_ephemeris_snapshot("local/ephemeris/manifest.json")
+data = of.DataSnapshot.builtin_time().with_ephemeris(
+    "de440s", entry.manifest, "local/spice-runtime")
+```
+
+两种导入与 C++ `DataCatalog` 共用实现；计算前仍须选择 SRP 遮挡体，并验证完整传播区间的覆盖。详见[数据中心](data_center.md#太阳系星历与日月引力)。

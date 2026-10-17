@@ -14,6 +14,13 @@ class IStateProvider {
   public:
     virtual ~IStateProvider() = default;
     [[nodiscard]] virtual std::vector<Epoch> discontinuities() const { return {}; }
+    // Lazy numerical ephemerides may need to generate nodes to enumerate their boundaries.
+    [[nodiscard]] virtual std::vector<Epoch>
+    discontinuities(const std::function<void()> &checkpoint) const {
+        if (checkpoint)
+            checkpoint();
+        return discontinuities();
+    }
     [[nodiscard]] virtual std::vector<ManeuverEvent>
     maneuvers(Epoch, Epoch, const std::function<void()> &checkpoint = {}) const {
         if (checkpoint)

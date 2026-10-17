@@ -1,4 +1,5 @@
 #include "report_selection.hpp"
+#include "workbench_theme.hpp"
 #include <QDialogButtonBox>
 #include <QFrame>
 #include <QLabel>
@@ -84,21 +85,15 @@ class ReportChoiceDelegate final : public QStyledItemDelegate {
         const QRect row = option.rect.adjusted(2, 2, -2, -2);
         const bool selected = option.state & QStyle::State_Selected;
         const bool unavailable = index.data(unavailable_role).toBool();
-        const bool focused = selected && (option.state & QStyle::State_HasFocus);
-        painter->setPen(focused    ? QColor("#9bd3ee")
-                        : selected ? QColor("#43657d")
-                                   : QColor(Qt::transparent));
-        painter->setBrush(selected                                   ? QColor("#263e50")
-                          : (option.state & QStyle::State_MouseOver) ? QColor("#202f3c")
-                                                                     : QColor(Qt::transparent));
-        painter->drawRoundedRect(row, 7, 7);
+        paint_list_row(painter, option, QRectF(row), theme::color(theme::accent));
         const auto icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
         icon.paint(painter, QRect(row.left() + 12, row.center().y() - 10, 20, 20), Qt::AlignCenter,
                    unavailable ? QIcon::Disabled : QIcon::Normal);
         QFont name_font = option.font;
-        name_font.setWeight(QFont::DemiBold);
         painter->setFont(name_font);
-        painter->setPen(unavailable ? QColor("#9aaaba") : QColor("#e4eef5"));
+        painter->setPen(theme::color(unavailable ? theme::text_faint
+                                     : selected  ? theme::accent_bright
+                                                 : theme::text));
         const int x = row.left() + 45, available = std::max(0, row.width() - 64);
         const QFontMetrics name_metrics(name_font);
         painter->drawText(
@@ -107,7 +102,7 @@ class ReportChoiceDelegate final : public QStyledItemDelegate {
         QFont subtitle_font = option.font;
         subtitle_font.setPixelSize(std::max(11, option.font.pixelSize() - 1));
         painter->setFont(subtitle_font);
-        painter->setPen(selected ? QColor("#aac9db") : QColor("#8ea4b7"));
+        painter->setPen(theme::color(theme::text_muted));
         const QFontMetrics subtitle_metrics(subtitle_font);
         painter->drawText(
             QRect(x, row.top() + 12 + name_metrics.height(), available, subtitle_metrics.height()),
@@ -127,8 +122,8 @@ ReportSelectionDialog::ReportSelectionDialog(std::vector<ReportChoice> choices, 
     resize(840, 580);
     setMinimumSize(360, 440);
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(24, 22, 24, 18);
-    layout->setSpacing(18);
+    layout->setContentsMargins(theme::space::page);
+    layout->setSpacing(16);
     auto *heading_layout = new QVBoxLayout;
     heading_layout->setSpacing(6);
     auto *heading = new QLabel(QStringLiteral("选择报告"), this);
@@ -193,7 +188,7 @@ ReportSelectionDialog::ReportSelectionDialog(std::vector<ReportChoice> choices, 
     details->setObjectName("reportSelectionDetails");
     scroll->setWidget(details);
     auto *preview_layout = new QVBoxLayout(details);
-    preview_layout->setContentsMargins(22, 22, 22, 22);
+    preview_layout->setContentsMargins(20, 20, 20, 20);
     preview_layout->setSpacing(12);
     const auto label = [&](const char *name) {
         auto *value = new QLabel(details);
@@ -286,8 +281,8 @@ void ReportSelectionDialog::set_choices(std::vector<ReportChoice> choices) {
         const QSignalBlocker guard(list_);
         list_->clear();
         for (const auto &choice : choices_) {
-            auto *item = new QListWidgetItem(workbench_icon(choice.icon, QColor("#9bcce5")),
-                                             choice.name, list_);
+            auto *item = new QListWidgetItem(
+                workbench_icon(choice.icon, theme::color(theme::accent)), choice.name, list_);
             item->setData(Qt::UserRole, choice.key);
             const auto subtitle = choice.saved ? choice.kind + QStringLiteral(" · ") + choice.scope
                                   : choice.output.isEmpty() ? choice.kind
@@ -339,9 +334,9 @@ void ReportSelectionDialog::preview() {
     category_->setText(
         valid ? (found->saved ? QStringLiteral("项目模板") : QStringLiteral("内置报告"))
               : QStringLiteral("报告预览"));
-    symbol_->setPixmap(
-        workbench_icon(valid ? found->icon : WorkbenchIcon::search, QColor("#a2d4ec"))
-            .pixmap(24, 24));
+    symbol_->setPixmap(workbench_icon(valid ? found->icon : WorkbenchIcon::search,
+                                      theme::color(theme::accent_bright))
+                           .pixmap(24, 24));
     description_->setText(valid ? found->description
                                 : QStringLiteral("从列表选择报告，查看它的内容与适用对象。"));
     output_->setText(valid ? (found->output.isEmpty() ? found->kind : found->output) : QString{});

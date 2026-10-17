@@ -95,7 +95,7 @@ ObjectSelectionDialog::ObjectSelectionDialog(std::vector<ObjectChoice> objects,
     resize(600, 540);
     setMinimumSize(360, 360);
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(20, 20, 20, 16);
+    layout->setContentsMargins(theme::space::page);
     layout->setSpacing(12);
     auto *title = new QLabel(QStringLiteral("选择对象"), this);
     title->setObjectName("panelTitle");
@@ -250,7 +250,7 @@ void ObjectSelectionDialog::set_objects(std::vector<ObjectChoice> objects) {
             item->setCheckState(0, contains(value_.ids, object.id) ? Qt::Checked : Qt::Unchecked);
         }
         if (missing)
-            item->setForeground(0, QColor("#deb6c7"));
+            item->setForeground(0, theme::color(theme::sakura));
         if (missing && !options_.multiple)
             flags = Qt::NoItemFlags;
         item->setFlags(flags);

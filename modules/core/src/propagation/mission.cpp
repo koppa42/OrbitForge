@@ -31,9 +31,16 @@ void validate_frame(ManeuverFrame frame) {
 }
 class MissionProvider final : public IStateProvider {
   public:
-    MissionProvider(CartesianState initial, MissionPlan plan, CoastFactory coast)
+    MissionProvider(CartesianState initial, MissionPlan plan, CoastFactory coast,
+                    std::optional<Epoch> stop)
         : first_(initial.epoch), last_(validate_mission(initial.epoch, plan)),
           plan_(std::move(plan)), coast_(std::move(coast)) {
+        if (stop) {
+            if (stop->tai_nanoseconds() < first_.tai_nanoseconds() ||
+                stop->tai_nanoseconds() > last_.tai_nanoseconds())
+                throw std::invalid_argument("Mission stop must lie inside its sequence");
+            last_ = *stop;
+        }
         if (initial.origin != OriginId::earth || initial.frame != FrameId::gcrf)
             throw std::invalid_argument("Mission initial state must be Earth-centered GCRF");
         validate_vector(initial.position_m);
@@ -45,10 +52,10 @@ class MissionProvider final : public IStateProvider {
             const auto &segment = plan_.segments[i];
             if (segment.kind == MissionSegmentKind::coast)
                 epoch += segment.duration_nanoseconds;
-            else
+            else if (epoch <= last_.tai_nanoseconds())
                 burns_.push_back({Epoch{epoch}, i});
         }
-        arcs_.push_back({first_, make_arc(initial)});
+        arcs_.push_back({first_, make_arc(initial, 0, {})});
     }
     CartesianState state_at(Epoch epoch) const override { return state_at(epoch, {}); }
     CartesianState state_at(Epoch epoch, const std::function<void()> &checkpoint) const override {
@@ -67,11 +74,22 @@ class MissionProvider final : public IStateProvider {
         }
         return provider->state_at(epoch, checkpoint);
     }
-    std::vector<Epoch> discontinuities() const override {
+    std::vector<Epoch> discontinuities() const override { return discontinuities({}); }
+    std::vector<Epoch> discontinuities(const std::function<void()> &checkpoint) const override {
+        if (checkpoint)
+            checkpoint();
+        std::lock_guard lock(mutex_);
+        prepare(last_, checkpoint);
         std::vector<Epoch> result;
         for (const auto &burn : burns_)
-            if (result.empty() || result.back() != burn.epoch)
-                result.push_back(burn.epoch);
+            result.push_back(burn.epoch);
+        for (const auto &arc : arcs_) {
+            const auto boundaries = arc.provider->discontinuities(checkpoint);
+            result.insert(result.end(), boundaries.begin(), boundaries.end());
+        }
+        std::sort(result.begin(), result.end(),
+                  [](Epoch a, Epoch b) { return a.tai_nanoseconds() < b.tai_nanoseconds(); });
+        result.erase(std::unique(result.begin(), result.end()), result.end());
         return result;
     }
     std::vector<ManeuverEvent> maneuvers(Epoch first, Epoch last,
@@ -108,8 +126,11 @@ class MissionProvider final : public IStateProvider {
     mutable std::mutex mutex_;
     mutable std::vector<Arc> arcs_;
     mutable std::vector<ManeuverEvent> events_;
-    std::shared_ptr<const IStateProvider> make_arc(const CartesianState &state) const {
-        auto result = coast_(state);
+    std::shared_ptr<const IStateProvider> make_arc(const CartesianState &state,
+                                                   std::size_t next_burn,
+                                                   const std::function<void()> &checkpoint) const {
+        const Epoch end = next_burn < burns_.size() ? burns_[next_burn].epoch : last_;
+        auto result = coast_(state, end, checkpoint);
         if (!result)
             throw std::invalid_argument("Mission coast factory returned a null provider");
         return result;
@@ -142,7 +163,7 @@ class MissionProvider final : public IStateProvider {
             if (!std::isfinite(total))
                 throw PropagationError("Mission cumulative delta-v is not finite");
             ManeuverEvent event{burn.index, segment.name, before, after, delta, total};
-            auto provider = make_arc(after);
+            auto provider = make_arc(after, events_.size() + 1, checkpoint);
             if (checkpoint)
                 checkpoint();
             events_.push_back(std::move(event));
@@ -222,7 +243,7 @@ CartesianState apply_impulse(const CartesianState &before, Vector delta_v, Maneu
     return result;
 }
 std::shared_ptr<const IStateProvider> make_mission(CartesianState initial, MissionPlan plan,
-                                                   CoastFactory coast) {
-    return std::make_shared<MissionProvider>(initial, std::move(plan), std::move(coast));
+                                                   CoastFactory coast, std::optional<Epoch> stop) {
+    return std::make_shared<MissionProvider>(initial, std::move(plan), std::move(coast), stop);
 }
 } // namespace orbitforge::core

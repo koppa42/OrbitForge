@@ -1,0 +1,7 @@
+[
+  {"file":"JacchiaRobertsAtmosphere.cpp","url":"https://raw.githubusercontent.com/nasa/GMAT/c9b78bd1c8499845cb78fde315e1f761b6b06f1c/src/base/solarsys/JacchiaRobertsAtmosphere.cpp","sha256":"e4d4c077b27c8cb06a07454b6cef0cab68b7b2e6ed63d0b19df90f69a2696bdc"},
+  {"file":"JacchiaRobertsAtmosphere.hpp","url":"https://raw.githubusercontent.com/nasa/GMAT/c9b78bd1c8499845cb78fde315e1f761b6b06f1c/src/base/solarsys/JacchiaRobertsAtmosphere.hpp","sha256":"25b739a32fee12f17538210616125df087ab806eb68a076caa6df7db28e4c768"},
+  {"file":"nrlmsise-00.c","url":"https://git.linta.de/~brodo/nrlmsise-00.git/plain/nrlmsise-00.c?id=bc9a2feba4344e74201281e563332688a4d09cc3","sha256":"a20d6523420188241963f095ad0b65df44ac0a6fa6db52d2e1df823c366f0285"},
+  {"file":"nrlmsise-00.h","url":"https://git.linta.de/~brodo/nrlmsise-00.git/plain/nrlmsise-00.h?id=bc9a2feba4344e74201281e563332688a4d09cc3","sha256":"d5b45be690bbc6cf394f69b18c0e641a1769da0a87015704fdabf0e7560794aa"},
+  {"file":"nrlmsise-00_data.c","url":"https://git.linta.de/~brodo/nrlmsise-00.git/plain/nrlmsise-00_data.c?id=bc9a2feba4344e74201281e563332688a4d09cc3","sha256":"d0b3022f3c3e7ffdf703cc0e0d02339dfee01c0bf1520b29c68d5f4afd8784d5"}
+]

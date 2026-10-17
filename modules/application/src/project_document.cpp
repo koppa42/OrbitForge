@@ -323,11 +323,13 @@ void ProjectEdit::earth_orientation(std::optional<core::EopDataInfo> data) {
 }
 void ProjectEdit::analysis_data(std::optional<core::EopDataInfo> eop,
                                 std::optional<core::TimeDataInfo> time,
-                                std::optional<AnalysisRecord> record) {
+                                std::optional<AnalysisRecord> record,
+                                std::vector<DataReference> forces) {
     objects().mutate([&](Project &next) {
         next.earth_orientation = std::move(eop);
         next.time_data = std::move(time);
         next.analysis_record = std::move(record);
+        next.force_data = std::move(forces);
     });
 }
 void ProjectEdit::reports(std::vector<ReportDefinition> reports) {
@@ -478,8 +480,12 @@ ObjectRef ObjectManager::create(const objects::Sensor &definition) {
     const auto ref = allocate(ObjectKind::sensor);
     mutate([&](Project &next) {
         check_ref(definition.parent, next, ObjectKind::satellite);
-        ProjectSensor value{ref.id(), definition.name, definition.parent.id(),
-                            definition.half_angle_rad, SensorPointing::nadir, {}};
+        ProjectSensor value{ref.id(),
+                            definition.name,
+                            definition.parent.id(),
+                            definition.half_angle_rad,
+                            SensorPointing::nadir,
+                            {}};
         if (definition.pointing.target) {
             check_ref(*definition.pointing.target, next, ObjectKind::ground_station);
             value.pointing = SensorPointing::targeted;

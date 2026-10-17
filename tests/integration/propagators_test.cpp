@@ -1,5 +1,6 @@
 #include <cmath>
 #include <gtest/gtest.h>
+#include <orbitforge/runtime/hpop.hpp>
 #include <orbitforge/runtime/j4.hpp>
 #include <orbitforge/runtime/project.hpp>
 #include <orbitforge/runtime/report.hpp>
@@ -73,7 +74,7 @@ TEST(Propagators, NewModelsRoundTripAndReportsUseConvertedStates) {
     project.satellites.push_back(satellite);
     const auto bytes = application::encode_project(project);
     const auto restored = application::decode_project(bytes);
-    EXPECT_EQ(bytes[8], 14);
+    EXPECT_EQ(bytes[8], 40);
     EXPECT_EQ(application::encode_project(restored), bytes);
     EXPECT_EQ(restored.satellites[0].orbit.tle, tle);
     const auto scenario = runtime::make_project_scenario(restored, time.get());
@@ -103,4 +104,18 @@ TEST(Propagators, NewModelsRoundTripAndReportsUseConvertedStates) {
     EXPECT_EQ(runtime::report_input_sha256(project), hash);
     project.satellites[0].orbit.tle.line1[68] = 'x';
     EXPECT_THROW((void)application::encode_project(project), application::ProjectError);
+}
+
+TEST(Propagators, HpopProvenanceIdentifiesTheSeventhOrderRkfMember) {
+    core::HpopOptions options;
+    options.gravity_degree = options.gravity_order = 0;
+    const core::CartesianState initial{core::Epoch{0},
+                                       core::OriginId::earth,
+                                       core::FrameId::gcrf,
+                                       {7e6, 0, 0},
+                                       {0, std::sqrt(core::egm96_mu / 7e6), 0}};
+    const auto session = runtime::make_hpop_session(initial, options);
+    EXPECT_NE(session.provenance().algorithm.find("rkf78-7th-fehlberg-r287-v1;"),
+              std::string::npos);
+    EXPECT_EQ(session.provenance().algorithm.find("rkf78-8th-v1;"), std::string::npos);
 }

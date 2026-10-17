@@ -23,8 +23,8 @@ new_scenario_dialog(QWidget *parent, core::Epoch coverage_first, core::Epoch cov
     dialog.setWindowIcon(workbench_icon(WorkbenchIcon::orbit));
     dialog.setMinimumWidth(560);
     auto *layout = new QVBoxLayout(&dialog);
-    layout->setContentsMargins(28, 26, 28, 22);
-    layout->setSpacing(18);
+    layout->setContentsMargins(theme::space::page);
+    layout->setSpacing(16);
     auto *title = new QLabel(QStringLiteral("新建场景"));
     title->setObjectName("panelTitle");
     layout->addWidget(title);
@@ -32,8 +32,8 @@ new_scenario_dialog(QWidget *parent, core::Epoch coverage_first, core::Epoch cov
     description->setObjectName("dialogDescription");
     layout->addWidget(description);
     auto *form = new QFormLayout;
-    form->setHorizontalSpacing(18);
-    form->setVerticalSpacing(14);
+    form->setHorizontalSpacing(16);
+    form->setVerticalSpacing(12);
     form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     auto *name = new QLineEdit("Scenario1");
     name->setMaximumWidth(380);

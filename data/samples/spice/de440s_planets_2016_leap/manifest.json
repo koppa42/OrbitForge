@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "orbitforge-de440s-planets-2016-leap-v1",
+  "model": "DE440s-derived-solar-system; SPICE J2000 with DE440 ICRF axes",
+  "first_tai_ns": 536155236000000000,
+  "last_tai_ns": 536760037000000000,
+  "kernels": [
+    {
+      "file": "naif0012.tls",
+      "kind": "LSK",
+      "sha256": "678e32bdb5a744117a467cd9601cd6b373f0e9bc9bbde1371d5eee39600a039b",
+      "source_url": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/lsk/naif0012.tls",
+      "source_sha256": "678e32bdb5a744117a467cd9601cd6b373f0e9bc9bbde1371d5eee39600a039b",
+      "producer": "NAIF / JPL"
+    },
+    {
+      "file": "orbitforge_de440s_planets_2016_leap.bsp",
+      "kind": "SPK",
+      "sha256": "e4c52121a5de093ea75f9826d5db48aeba25bb0f8bbe542e6fa07c6a0dd824fd",
+      "source_url": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440s.bsp",
+      "source_sha256": "c1c7feeab882263fc493a9d5a5b2ddd71b54826cdf65d8d17a76126b260a49f2",
+      "producer": "OrbitForge project; derived from JPL DE440s"
+    }
+  ]
+}

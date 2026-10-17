@@ -21,7 +21,13 @@ enum class Unit {
     hour,
     day,
     metres_cubed_per_second_squared,
-    kilometres_cubed_per_second_squared
+    kilometres_cubed_per_second_squared,
+    square_metres_per_kilogram,
+    square_centimetres_per_gram,
+    pascal,
+    kilogram,
+    gram,
+    tonne
 };
 QString unit_symbol(Unit unit);
 std::vector<Unit> compatible_units(Unit unit);
@@ -42,6 +48,8 @@ class QuantityEditor final : public QFrame {
     // Optional physical resolution, e.g. whole seconds; zero disables quantization.
     void set_quantum(double quantum, Unit unit);
     void set_label(const QString &label);
+    // A published constant can still be displayed in another compatible unit.
+    void set_read_only(bool value);
 
   signals:
     // SI value (or dimensionless), only emitted for a valid physical value change.
@@ -57,6 +65,7 @@ class QuantityEditor final : public QFrame {
     void render();
     void validate_text();
     void refresh_style();
+    void fit_unit_button();
     Unit unit_, base_unit_;
     double stored_ = 0, last_notified_ = 0;
     double minimum_ = -std::numeric_limits<double>::max();

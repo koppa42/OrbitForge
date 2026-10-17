@@ -9,14 +9,23 @@
 #include <QScrollBar>
 #include <gtest/gtest.h>
 #include <memory>
+#include <stdexcept>
 
 namespace orbitforge::desktop {
-TEST(WelcomePage, ActionsRemainReachableAtNarrowAndWideSizes) {
+namespace {
+QApplication &styled_application() {
     static int argc = 1;
     static char executable[] = "welcome_test";
     static char *argv[] = {executable, nullptr};
     static QApplication app(argc, argv);
-    apply_workbench_style(app);
+    static const bool styled = (apply_workbench_style(app), true);
+    (void)styled;
+    return app;
+}
+} // namespace
+
+TEST(WelcomePage, ActionsRemainReachableAtNarrowAndWideSizes) {
+    (void)styled_application();
     QAction create, open, example;
     int created = 0, opened = 0, tried = 0;
     QObject::connect(&create, &QAction::triggered, [&] { ++created; });
@@ -53,5 +62,23 @@ TEST(WelcomePage, ActionsRemainReachableAtNarrowAndWideSizes) {
     EXPECT_EQ(created, 2);
     EXPECT_EQ(opened, 2);
     EXPECT_EQ(tried, 2);
+}
+
+TEST(WorkbenchTheme, StylesheetReferencesOnlyKnownTokens) {
+    EXPECT_EQ(theme::resolve("a { color: @accent; background: @accentWash; }"),
+              QString("a { color: %1; background: %2; }")
+                  .arg(QLatin1StringView(theme::accent.value.data(), theme::accent.value.size()),
+                       QLatin1StringView(theme::accent_wash.value.data(),
+                                         theme::accent_wash.value.size())));
+    const auto canvas = theme::color(theme::canvas);
+    EXPECT_EQ(
+        theme::resolve("@canvas/50"),
+        QString("rgba(%1, %2, %3, 128)").arg(canvas.red()).arg(canvas.green()).arg(canvas.blue()));
+    EXPECT_THROW((void)theme::resolve("a { color: @unknownToken; }"), std::invalid_argument);
+    EXPECT_THROW((void)theme::resolve("a { color: @canvas/150; }"), std::invalid_argument);
+    // The application stylesheet resolved every reference when the style was applied.
+    const auto &app = styled_application();
+    EXPECT_FALSE(app.styleSheet().isEmpty());
+    EXPECT_FALSE(app.styleSheet().contains('@'));
 }
 } // namespace orbitforge::desktop

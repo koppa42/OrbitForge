@@ -13,6 +13,7 @@
 #include <cmath>
 #include <gtest/gtest.h>
 #include <orbitforge/application/project.hpp>
+#include <orbitforge/runtime/ephemeris.hpp>
 
 namespace orbitforge::desktop {
 namespace {
@@ -306,7 +307,7 @@ TEST_F(DataCenterTest, ConditionalUpdatesSkipUnchangedBytesAndPreserveOldVersion
 TEST_F(DataCenterTest, InventorySeparatesInstallationCoverageAndUpdateCapabilities) {
     EopCatalog empty(root() / "empty", {}, {}, false);
     const auto missing = empty.inventory();
-    ASSERT_EQ(missing.size(), 3);
+    ASSERT_EQ(missing.size(), all_data_products.size());
     EXPECT_EQ(missing[0].installation, DataInstallation::missing);
     EXPECT_FALSE(missing[0].last.isValid());
     EXPECT_TRUE(missing[0].online_updates);
@@ -708,5 +709,293 @@ TEST_F(DataCenterTest, ExtrapolationNeverExtendsLeapSecondValidity) {
     EXPECT_NO_THROW((void)extended->at(core::Epoch{expiry.tai_nanoseconds() - 1}));
     EXPECT_THROW((void)extended->at(expiry), core::TimeDataRangeError);
 }
+TEST_F(DataCenterTest, GravityImportRunsInBackgroundAndRejectsInvalidReplacement) {
+    EopCatalog catalog(root() / "data", {}, {}, false);
+    EXPECT_FALSE(catalog.automatic_updates(DataProduct::egm2008));
+    EXPECT_FALSE(catalog.automatic_updates(DataProduct::egm96));
+    const auto file = root() / "custom.grv";
+    QFile source(QString::fromStdWString(file.wstring()));
+    ASSERT_TRUE(source.open(QIODevice::WriteOnly));
+    source.write("stk.v.6.0\nModel Local\nDegree 21\nOrder 21\nGm 3.986004415e14\nRefDistance "
+                 "6378136.3\nNormalized Yes\nIncludesPermTide No\nBEGIN Coefficients\n2 0 "
+                 "-0.000484 0\nEND Coefficients\n");
+    source.close();
+    catalog.import_raw(file, DataProduct::custom_gravity);
+    ASSERT_TRUE(catalog.downloading());
+    complete(catalog);
+    const auto item = catalog.inventory().at(static_cast<std::size_t>(DataProduct::custom_gravity));
+    ASSERT_TRUE(item.gravity);
+    EXPECT_EQ(item.gravity->degree, 21);
+    EXPECT_FALSE(item.first.isValid());
+    EXPECT_FALSE(item.last.isValid());
+    ASSERT_TRUE(source.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    source.write("bad gravity data\n");
+    source.close();
+    catalog.import_raw(file, DataProduct::custom_gravity);
+    complete(catalog);
+    EXPECT_EQ(catalog.update_status(DataProduct::custom_gravity).state, DataUpdateState::failed);
+    EXPECT_EQ(catalog.inventory().at(static_cast<std::size_t>(DataProduct::custom_gravity)).sha256,
+              item.sha256);
+    Server server("not an official EGM2008 field");
+    catalog.start_download(server.url(), DataProduct::egm2008);
+    complete(catalog);
+    EXPECT_EQ(catalog.update_status(DataProduct::egm2008).state, DataUpdateState::failed);
+    EXPECT_FALSE(catalog.has_full_download(DataProduct::egm2008));
+}
+TEST_F(DataCenterTest, LiveOfficialGravityDownload) {
+    if (qEnvironmentVariableIsEmpty("ORBITFORGE_LIVE_GRAVITY"))
+        GTEST_SKIP();
+    EopCatalog catalog(root() / "data", {}, {}, false);
+    const auto product = qEnvironmentVariable("ORBITFORGE_LIVE_GRAVITY") == "egm2008"
+                             ? DataProduct::egm2008
+                             : DataProduct::egm96;
+    catalog.start_download({}, product);
+    QElapsedTimer timer;
+    timer.start();
+    while (catalog.downloading() && timer.elapsed() < 600000)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    ASSERT_FALSE(catalog.downloading());
+    ASSERT_EQ(catalog.update_status(product).state, DataUpdateState::updated)
+        << catalog.status().toStdString();
+    EXPECT_TRUE(catalog.has_full_download(product));
+    const auto received = catalog.received_bytes();
+    EXPECT_GT(received, product == DataProduct::egm2008 ? 200'000'000 : 5'000'000);
+    catalog.start_download({}, product);
+    timer.restart();
+    while (catalog.downloading() && timer.elapsed() < 600000)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    ASSERT_FALSE(catalog.downloading());
+    EXPECT_EQ(catalog.update_status(product).state, DataUpdateState::unchanged);
+}
+TEST_F(DataCenterTest, EphemerisDownloadRejectsWrongContentAndCanBeCancelled) {
+    EopCatalog catalog(root() / "data", {}, {}, false);
+    EXPECT_FALSE(catalog.automatic_updates(DataProduct::de440s));
+    EXPECT_FALSE(catalog.has_full_download(DataProduct::de440s));
+    EXPECT_TRUE(
+        catalog.inventory().at(static_cast<std::size_t>(DataProduct::de440s)).online_updates);
+    Server server("invalid SPK data");
+    catalog.start_download(server.url(), DataProduct::de440s);
+    complete(catalog);
+    EXPECT_EQ(catalog.update_status(DataProduct::de440s).state, DataUpdateState::failed);
+    EXPECT_TRUE(catalog.data().ephemerides().empty());
+    catalog.start_download(server.url(), DataProduct::de440s);
+    catalog.cancel_download();
+    complete(catalog);
+    EXPECT_EQ(catalog.update_status(DataProduct::de440s).state, DataUpdateState::cancelled);
+    EXPECT_TRUE(catalog.data().ephemerides().empty());
+    catalog.set_automatic_updates(true, DataProduct::de440s);
+    catalog.set_update_interval_hours(168, DataProduct::de440s);
+    EopCatalog reopened(root() / "data", {}, {}, false);
+    EXPECT_TRUE(reopened.automatic_updates(DataProduct::de440s));
+    EXPECT_EQ(reopened.update_interval_hours(DataProduct::de440s), 168);
+}
+TEST_F(DataCenterTest, LiveOfficialEphemerisDownloadAndRecheckRetainCurrentData) {
+    const auto local_file = qEnvironmentVariable("ORBITFORGE_FULL_DE440S");
+    if (qEnvironmentVariableIsEmpty("ORBITFORGE_LIVE_DE440S") && local_file.isEmpty())
+        GTEST_SKIP();
+    std::unique_ptr<Server> local_source;
+    if (!local_file.isEmpty()) {
+        QFile file(local_file);
+        ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+        ASSERT_LE(file.size(), 64 * 1024 * 1024);
+        local_source = std::make_unique<Server>(file.readAll());
+        local_source->etag = "\"full-de440s\"";
+    }
+    const auto endpoint = local_source ? local_source->url() : QUrl{};
+    EopCatalog catalog(root() / "data", {}, {}, false);
+    catalog.start_download(endpoint, DataProduct::de440s);
+    QElapsedTimer timer;
+    timer.start();
+    while (catalog.downloading() && timer.elapsed() < 300000)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    ASSERT_FALSE(catalog.downloading());
+    ASSERT_EQ(catalog.update_status(DataProduct::de440s).state, DataUpdateState::updated)
+        << catalog.status().toStdString();
+    ASSERT_TRUE(catalog.has_full_download(DataProduct::de440s));
+    const auto item = catalog.inventory().at(static_cast<std::size_t>(DataProduct::de440s));
+    EXPECT_EQ(item.first.date(), QDate(1850, 1, 1));
+    EXPECT_EQ(item.last.date(), QDate(2150, 1, 1));
+    EXPECT_GT(*item.file_size, 30000000U);
+    auto provider = catalog.data().load_ephemeris("de440s");
+    const auto position = provider->position(core::ThirdBody::sun, core::Epoch{0});
+    const auto sample = std::filesystem::path(ORBITFORGE_TEST_PLANETS).parent_path().parent_path() /
+                        "mar099s_2016_leap/mar099s_subset.bsp";
+    catalog.import_planetary_centres(sample);
+    complete(catalog);
+    ASSERT_EQ(catalog.update_status(DataProduct::de440s).state, DataUpdateState::updated);
+    const auto augmented = catalog.data().ephemerides().at(0);
+    catalog.import_raw(augmented.manifest.parent_path() / "de440s.bsp", DataProduct::de440s);
+    complete(catalog);
+    ASSERT_EQ(catalog.update_status(DataProduct::de440s).state, DataUpdateState::unchanged);
+    const auto refreshed = catalog.data().ephemerides().at(0);
+    EXPECT_EQ(refreshed.info.content_sha256, augmented.info.content_sha256);
+    const std::array mars{core::ThirdBody::mars};
+    const auto supplemented = catalog.data().load_ephemeris("de440s");
+    EXPECT_THROW(supplemented->validate_eclipsing_body_interval(refreshed.info.first,
+                                                                refreshed.info.last, mars),
+                 core::EphemerisCoverageError);
+    catalog.start_download(endpoint, DataProduct::de440s);
+    timer.restart();
+    while (catalog.downloading() && timer.elapsed() < 300000)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    ASSERT_FALSE(catalog.downloading());
+    EXPECT_EQ(catalog.update_status(DataProduct::de440s).state, DataUpdateState::unchanged);
+    if (local_source) {
+        catalog.start_download(endpoint, DataProduct::de440s);
+        complete(catalog);
+        EXPECT_EQ(catalog.update_status(DataProduct::de440s).state, DataUpdateState::unchanged);
+        ASSERT_EQ(local_source->requests.size(), 3);
+        EXPECT_TRUE(local_source->requests.back().contains("If-None-Match: " + local_source->etag));
+    }
+    EXPECT_EQ(catalog.data().ephemerides().at(0).info.content_sha256,
+              augmented.info.content_sha256);
+    EXPECT_TRUE(catalog.has_full_download(DataProduct::de440s));
+    EXPECT_EQ(provider->position(core::ThirdBody::sun, core::Epoch{0}), position);
+    Server invalid("truncated replacement");
+    catalog.start_download(invalid.url(), DataProduct::de440s);
+    complete(catalog);
+    EXPECT_EQ(catalog.update_status(DataProduct::de440s).state, DataUpdateState::failed);
+    EXPECT_EQ(catalog.inventory().at(static_cast<std::size_t>(DataProduct::de440s)).sha256,
+              item.sha256);
+    EXPECT_EQ(
+        catalog.data().load_ephemeris("de440s")->position(core::ThirdBody::sun, core::Epoch{0}),
+        position);
+}
 } // namespace
+TEST_F(DataCenterTest, WeatherDownloadImportsRawBytesAndFailedReplacementRetainsSnapshot) {
+    EopCatalog catalog(root() / "data", {}, {}, false);
+    const QByteArray csv =
+        "DATE,BSRN,ND,KP1,KP2,KP3,KP4,KP5,KP6,KP7,KP8,KP_SUM,"
+        "AP1,AP2,AP3,AP4,AP5,AP6,AP7,AP8,AP_AVG,CP,C9,ISN,F10.7_OBS,F10.7_ADJ,"
+        "F10.7_DATA_TYPE,F10.7_OBS_CENTER81,F10.7_OBS_LAST81,F10.7_ADJ_CENTER81,F10.7_ADJ_LAST81\n"
+        "2000-01-01,1,1,30,30,30,30,30,30,30,30,240,15,15,15,15,15,15,15,15,15,0,0,0,150,150,OBS,"
+        "150,150,150,150\n";
+    Server server(csv);
+    catalog.start_download(server.url(), DataProduct::space_weather);
+    complete(catalog);
+    ASSERT_EQ(catalog.update_status(DataProduct::space_weather).state, DataUpdateState::updated)
+        << catalog.status().toStdString();
+    EXPECT_TRUE(catalog.has_full_download(DataProduct::space_weather));
+    const auto before = catalog.data().load_space_weather("celestrak");
+    const auto item = catalog.inventory().at(static_cast<std::size_t>(DataProduct::space_weather));
+    EXPECT_EQ(item.first.date(), QDate(2000, 1, 1));
+    EXPECT_EQ(item.sha256, QString::fromStdString(before->info().sha256));
+    Server broken("bad weather");
+    catalog.start_download(broken.url(), DataProduct::space_weather);
+    complete(catalog);
+    EXPECT_EQ(catalog.update_status(DataProduct::space_weather).state, DataUpdateState::failed);
+    EXPECT_EQ(catalog.data().load_space_weather("celestrak")->info().sha256, before->info().sha256);
+}
+
+TEST_F(DataCenterTest, OceanImportRunsInBackgroundAndFailedOrCancelledDownloadsPreserveData) {
+    EopCatalog catalog(root() / "data", {}, {}, false);
+    EXPECT_FALSE(catalog.automatic_updates(DataProduct::fes2014bv1));
+    const auto path = root() / "custom.pot";
+    QFile file(QString::fromStdWString(path.wstring()));
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write(
+        "Coefficients to compute variations in normalized Stokes coefficients (unit = 10^-11)\n"
+        "Ocean tide model: Local up to (2,0)\n(test)\nDoodson Darw l m DelC+ DelS+ DelC- DelS-\n"
+        "55.555 Test 2 0 1 2 3 4\n");
+    file.close();
+    catalog.import_raw(path, DataProduct::custom_ocean_tides);
+    EXPECT_TRUE(catalog.downloading());
+    complete(catalog);
+    const auto item =
+        catalog.inventory().at(static_cast<std::size_t>(DataProduct::custom_ocean_tides));
+    ASSERT_TRUE(item.ocean_tides);
+    EXPECT_EQ(item.ocean_tides->degree, 2);
+    EXPECT_EQ(item.ocean_tides->order, 0);
+    EXPECT_FALSE(item.first.isValid());
+    const auto frozen = catalog.data().load_ocean_tides("custom-ocean");
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write("bad ocean data");
+    file.close();
+    catalog.import_raw(path, DataProduct::custom_ocean_tides);
+    complete(catalog);
+    EXPECT_EQ(catalog.update_status(DataProduct::custom_ocean_tides).state,
+              DataUpdateState::failed);
+    EXPECT_EQ(catalog.data().load_ocean_tides("custom-ocean")->info().sha256,
+              frozen->info().sha256);
+    Server invalid("not an official FES potential model");
+    catalog.start_download(invalid.url(), DataProduct::fes2014bv1);
+    complete(catalog);
+    EXPECT_EQ(catalog.update_status(DataProduct::fes2014bv1).state, DataUpdateState::failed);
+    EXPECT_FALSE(catalog.has_full_download(DataProduct::fes2014bv1));
+    catalog.start_download(invalid.url(), DataProduct::fes2014bv1);
+    catalog.cancel_download();
+    complete(catalog);
+    EXPECT_EQ(catalog.update_status(DataProduct::fes2014bv1).state, DataUpdateState::cancelled);
+    EXPECT_EQ(catalog.data().load_ocean_tides("custom-ocean")->info().sha256,
+              frozen->info().sha256);
+}
+TEST_F(DataCenterTest, FullOceanTransferRecheckAndInvalidReplacementPreserveFrozenModel) {
+    const auto path = qEnvironmentVariable("ORBITFORGE_FULL_OCEAN_FILE");
+    if (path.isEmpty())
+        GTEST_SKIP()
+            << "Set ORBITFORGE_FULL_OCEAN_FILE to test the complete pinned download payload";
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    Server server(file.readAll());
+    server.etag = "\"ocean-v1\"";
+    EopCatalog catalog(root() / "data", {}, {}, false);
+    catalog.start_download(server.url(), DataProduct::fes2014bv1);
+    complete(catalog);
+    ASSERT_EQ(catalog.update_status(DataProduct::fes2014bv1).state, DataUpdateState::updated)
+        << catalog.status().toStdString();
+    EXPECT_TRUE(catalog.has_full_download(DataProduct::fes2014bv1));
+    const auto frozen = catalog.data().load_ocean_tides("fes2014bv1");
+    EXPECT_EQ(frozen->info().degree, 100);
+    EXPECT_EQ(frozen->info().constituents, 36U);
+    catalog.start_download(server.url(), DataProduct::fes2014bv1);
+    complete(catalog);
+    EXPECT_EQ(catalog.update_status(DataProduct::fes2014bv1).state, DataUpdateState::unchanged);
+    ASSERT_EQ(server.requests.size(), 2);
+    EXPECT_TRUE(server.requests.back().contains("If-None-Match: " + server.etag));
+    Server invalid("truncated replacement");
+    catalog.start_download(invalid.url(), DataProduct::fes2014bv1);
+    complete(catalog);
+    EXPECT_EQ(catalog.update_status(DataProduct::fes2014bv1).state, DataUpdateState::failed);
+    EXPECT_EQ(catalog.data().load_ocean_tides("fes2014bv1")->info().sha256, frozen->info().sha256);
+}
+
+TEST_F(DataCenterTest,
+       PlanetarySpkImportUsesBackgroundPublicationAndRetainsThePreviousSnapshotOnFailure) {
+    if (!runtime::ephemeris_available())
+        GTEST_SKIP();
+    EopCatalog catalog(root() / "planet-data", {}, {}, false);
+    catalog.import_ephemeris_snapshot(ORBITFORGE_TEST_PLANETS);
+    complete(catalog);
+    ASSERT_EQ(catalog.update_status(DataProduct::de440s).state, DataUpdateState::updated)
+        << catalog.status().toStdString();
+    const auto base = catalog.data().ephemerides().at(0);
+    EXPECT_FALSE(catalog.has_full_download(DataProduct::de440s));
+    const auto inventory = catalog.inventory().at(static_cast<std::size_t>(DataProduct::de440s));
+    EXPECT_TRUE(std::filesystem::is_regular_file(inventory.file));
+    EXPECT_EQ(inventory.file.filename(), "orbitforge_de440s_planets_2016_leap.bsp");
+    EXPECT_EQ(inventory.sha256,
+              QStringLiteral("e4c52121a5de093ea75f9826d5db48aeba25bb0f8bbe542e6fa07c6a0dd824fd"));
+    EXPECT_EQ(inventory.identity_sha256, QString::fromStdString(base.info.content_sha256));
+    const auto sample = std::filesystem::path(ORBITFORGE_TEST_PLANETS).parent_path().parent_path() /
+                        "mar099s_2016_leap/mar099s_subset.bsp";
+    catalog.import_planetary_centres(sample);
+    complete(catalog);
+    ASSERT_EQ(catalog.update_status(DataProduct::de440s).state, DataUpdateState::updated)
+        << catalog.status().toStdString();
+    const auto imported = catalog.data().ephemerides().at(0);
+    EXPECT_NE(imported.info.content_sha256, base.info.content_sha256);
+    auto provider = catalog.data().load_ephemeris("de440s");
+    const std::array mars{core::ThirdBody::mars};
+    EXPECT_NO_THROW(
+        provider->validate_eclipsing_body_interval(imported.info.first, imported.info.last, mars));
+    const auto revision = catalog.revision();
+    catalog.import_planetary_centres(root() / "missing.bsp");
+    complete(catalog);
+    EXPECT_EQ(catalog.update_status(DataProduct::de440s).state, DataUpdateState::failed);
+    EXPECT_EQ(catalog.data().ephemerides().at(0).info.content_sha256, imported.info.content_sha256);
+    EXPECT_EQ(catalog.revision(), revision);
+    EopCatalog reopened(root() / "planet-data", {}, {}, false);
+    EXPECT_EQ(reopened.data().ephemerides().at(0).info.content_sha256,
+              imported.info.content_sha256);
+}
 } // namespace orbitforge::desktop

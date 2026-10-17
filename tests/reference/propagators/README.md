@@ -16,3 +16,201 @@ independently of CSPICE and the production rotation-cross-product implementation
 Columns are elapsed TAI seconds, GCRF metres and metres/second; epoch is `Epoch(0)`.
 Input: a=7000000 m, e=.01, i=98.5°, Ω=25°, ω=70°, M=10°; EGM2008 constants.
 This is a formula/transcription regression, not a direct STK comparison.
+
+`third_body.txt` contains 32 independent Orekit 13.1.2 / Hipparchus 4.0.2
+ThirdBodyAttraction + DP853 reference cases. The generator is
+`tools/validation/orekit/OrbitForgeThirdBodyReference.java`; dependency hashes are
+in its sibling `dependencies.json`. Explicit moving synthetic geocentric bodies
+isolate differential gravity from SPICE. Cases cover Sun, Moon, both, and GM
+overrides; LEO/GEO initial states; and positive/negative 6000 s and 86400 s.
+Positions, velocities, and accelerations are GCRF SI; elapsed time is TAI from
+Epoch(0). See `docs/validation/hpop_protocol.md` for reproduction and tolerances.
+Real DE440s routing/coverage has separate integration tests; these values do not
+claim a same-configuration STK comparison.
+
+`srp.txt` contains 24 independent Orekit 13.1.2 SolarRadiationPressure + DP853
+cases from `tools/validation/orekit/OrbitForgeSrpReference.java`: point-mass Earth,
+spherical Earth eclipse, explicit moving geometric Sun, LEO/GEO, both time
+directions, Cr/A/m variations and a 23 km atmospheric radius increment. DP853
+uses a 1 s maximum step, 1e-8 m / 1e-11 m/s absolute and 1e-14 relative tolerances;
+eclipse events use a 60 s check interval and 1e-8 s threshold. Solar radius is
+695700000 m. Columns contain initial acceleration and final GCRF SI state.
+This isolates force and propagation from real ephemerides, Earth shape and
+apparent-Sun conventions. Full parameter and test tolerances are in the protocol.
+
+`srp_geometry.txt` contains 182 deterministic clipped-union circle areas from
+`tools/validation/generate_srp_geometry_reference.py`. It integrates vertical
+cross-sections using adaptive Simpson quadrature after a sine substitution,
+independently of the production boundary-arc integration. Coordinates and
+radii are in units of the apparent solar radius; output is the lighting ratio.
+Cases include identical, contained, tangent, disjoint, annular and simultaneous
+Earth/Moon disks, with occultor radii up to 300 solar radii. Neither generator
+imports OrbitForge or calls the production force implementation.
+
+`solid_tides.txt` calls unmodified Orekit 13.1.2 SolidTidesField (IERS_2003 Love numbers, frequency/pole terms off), Holmes–Featherstone and DP853. Its 120 acceleration and 4 moving-body trajectory rows are produced by `tools/validation/orekit/OrbitForgeSolidTideReference.java`. See `docs/architecture/solid_tides.md` for complete conventions and tolerances.
+Fixed solid tide reference SHA-256: `8b50c6af9cc1beb3ecf762f71e2e39b65c5e0301b335e205fdce6552153eb1d1`. The generator uses only Orekit/Hipparchus; it does not import or call OrbitForge.
+
+`solid_tides_time_dependent.txt` adds unmodified Orekit 13.1.2 IERS_2003 frequency corrections (71 constituents) and the printed 2003 solid pole tide, including annual.pole interpolation. `OrbitForgeTimeDependentTideReference.java` calls Orekit's own implementations, then Holmes–Featherstone/DP853, without importing OrbitForge. Compile it with `OrbitForgeSolidTideReference.java` using the pinned JARs in `tools/validation/orekit/dependencies.json`; run `org.orekit.forces.gravity.OrbitForgeTimeDependentTideReference` and save UTF-8 LF output. The file records its synthetic UTC/EOP/frame convention and column meanings. There are 39 coefficient, 24 acceleration and 4 trajectory rows. Canonical LF SHA-256: `ad701acd8b1a4f2d0993acaa9c356e180a3c2dd6cfb8844927da5ef3c592e63f`.
+
+`relativity.txt` contains 45 independent three-term acceleration rows and 8 on/off forward/backward trajectories. `tools/validation/orekit/OrbitForgeRelativityReference.java` calls unmodified Orekit 13.1.2 Relativity, LenseThirringRelativity, DeSitterRelativity and DP853 with an explicit moving geometric Sun and tilted Earth axis. No OrbitForge code is called. Dependency hashes are in `dependencies.json`; units, TAI conventions and tolerances are in `docs/architecture/relativity.md`. Canonical UTF-8/LF SHA-256: `b3d6c74b77b0dedb0ee25881ac0b7e291f41b44667bdcf0aed1d7905d05e2339`.
+
+`gravity_full.txt` and `gravity_egm2008_full.txt` call unmodified Orekit 13.1.2
+Holmes–Featherstone and Hipparchus 4.0.2 DP853 through
+`tools/validation/orekit/OrbitForgeFullGravityReference.java`. The generator is in
+package `org.orekit.forces.gravity.potential` to access the reader's normalized
+wrapper. It never calls OrbitForge. Dependency hashes are in `dependencies.json`.
+Without arguments it emits 120 acceleration / 2 trajectory rows for three
+synthetic fields: dense 2190×2190, rectangular 2190×2159, and an amplified boundary
+field. Dense C20=-4.84165371736e-4; other Cnm=1e-8/(n+1)^2*sin((n+1)(m+2)),
+Snm=1e-8/(n+1)^2*cos((n+1)(m+2)), with Sn0=0. The boundary field contains C20 and
+C2190,0=1e-8; C2190,1=1e-10/S2190,1=-2e-10; C2190,2=-2e-10/S2190,2=3e-10;
+C2190,2159=2e-8/S2190,2159=-3e-8; C2190,2190=1e-8/S2190,2190=4e-8.
+With the complete pinned EGM2008.gfc path it emits 80 acceleration / 2 trajectory
+rows, after checking source SHA-256
+`ab5b524da073e63b5bdceb7ca47a0de07a26dd44a1c5798f39fc98dc80af70fd`.
+Orders 2160–2190 in this ICGEM export are explicitly zero-padded; integration
+tests check that evaluating all records equals the published 2190×2159 field.
+The 252140870-byte input is obtained from the ICGEM EGM2008 product URL pinned in
+`modules/runtime/src/gravity.cpp`; it is not redistributed in this repository.
+Both fields use GM=3.986004415e14 m³/s², radius=6378136.3 m, tide-free coefficients,
+a fixed GCRF-aligned Earth, and Epoch(0) TAI. Full inputs, truncations, bounds and
+commands are in `docs/validation/hpop_protocol.md`. The optional full-file test
+uses `ORBITFORGE_FULL_GRAVITY_FILE`; synthetic cases run offline in normal CI.
+Canonical LF SHA-256: `gravity_full.txt`
+`a916af840a15eb820ed0a3784d436d0b7f46e7f454eb758c9c24963ea7317185`;
+`gravity_egm2008_full.txt`
+`3853ad823b55dc6d5d86443e8390109dfc9f3b1fab1f8ff49cc4ffca6b555dba`.
+
+`mass.txt` compares STK spherical mass semantics with Orekit's area-and-mass API.
+Compile `OrbitForgeMassReference.java` with `OrbitForgeDragReference.java`, using
+the pinned `dependencies.json` JARs, then run `OrbitForgeMassReference` and save
+UTF-8/LF output. Its 28 rows cover masses 1/250/1000/2700 kg at equal A/m,
+changed A/m, zero drag/SRP areas, two LEO states and ±6000 s combined propagation.
+It calls Orekit 13.1.2 `DragForce` / `IsotropicDrag`, `SolarRadiationPressure` /
+`IsotropicRadiationSingleCoefficient`, and Hipparchus 4.0.2 DP853 without calling
+OrbitForge. The synthetic UTC/rotation/Sun are shared with the existing drag
+reference; full conventions and bounds are in `docs/validation/hpop_protocol.md`.
+Canonical LF SHA-256: `ff1e9b22217a87263181b4fab347a29cbdf21d6ab221395bd72145b3d4b04e3d`.
+
+`solid_tides_love.txt` adds custom real k20 values 0, 0.3, 0.30190 and 0.4 to
+unmodified Orekit 13.1.2 `LoveNumbers` / `SolidTidesField`. It has 48 coefficient,
+96 acceleration and 16 forward/backward one-day trajectory rows, covering both
+tide systems, independent degree/order truncation, near-polar positions and
+frequency/pole terms on/off. The permanent deformation uses the same custom k20;
+all other Love numbers and frequency/pole functions stay at IERS_2003 values.
+Compile `OrbitForgeLoveNumberReference.java` with the two tide generators above,
+using the pinned dependency JARs; run
+`org.orekit.forces.gravity.OrbitForgeLoveNumberReference` and save UTF-8 LF output.
+No OrbitForge implementation is called. Canonical LF SHA-256:
+`6f290d7b461a3d9881e3d0cd0cddae912871f305c901b8c10e6320044577475e`.
+
+
+`ocean_fes2014bv1_4x4.pot` is a byte-preserving degree <= 4 excerpt of the
+[GRGS FES2014b.v1 with S1 potential file](https://grace.obs-mip.fr/dealiasing_and_tides/ocean-tides/).
+The complete source is [the published POT download](https://api.sedoo.fr/formater-catalogue-prod/grace/direct/fes2014b.v1.Cnm-Snm_Om1%2BOm2C20_with_S1_wave.POT_format.txt),
+11177130 bytes, SHA-256 `74156304aca8f66ed1f67775de3d4a9d24ecb94abb47127ef40d5bb4630f719f`.
+Keep its first four header lines, replace `(100,100)` with `(4,4)` in the model
+header, retain every data line whose third whitespace-separated field (degree)
+is <= 4, and write LF without changing coefficient text. The result contains
+512 records and all 36 explicit constituents (Om2 only 2/0); SHA-256
+`ed53a1225d6e720264bbe22207bbd60933518c4552cd09a0f98d8e0a98cf70d9`.
+The source already includes the v1 phase corrections and radiational S1.
+It contains normalized potential, not water heights; do not reapply loading
+Love numbers or infer minor waves when reproducing these references.
+
+`ocean_tides_small.txt` and `ocean_tides_full.txt` are generated by
+`tools/validation/orekit/OrbitForgeOceanTideReference.java`, using the pinned
+Orekit 13.1.2 / Hipparchus 4.0.2 JARs in `dependencies.json`. The generator
+checks the respective input SHA-256. It calls unmodified `FESCnmSnmReader`,
+`OceanTidesField`, IERS_2010 ocean pole tide, Holmes–Featherstone and DP853;
+it never imports OrbitForge. Compile with the JAR classpath, then run
+`org.orekit.forces.gravity.OrbitForgeOceanTideReference <potential-path> <4-or-100>`.
+Save UTF-8/LF output without numeric changes. `S_n0` is canonical zero because
+its potential basis is identically zero. Small has 84 coefficient / 144
+acceleration / 4 trajectory rows; full has 216 / 240 / 12. Units and synthetic
+TT/UT1/EOP/body-frame conventions are in the headers and HPOP protocol.
+
+`ocean_tides_combined.txt` uses `OrbitForgeCombinedTideReference.java`, compiled
+with the ocean and solid-tide generators above. Run
+`org.orekit.forces.gravity.OrbitForgeCombinedTideReference <4x4-potential-path>`.
+Orekit adds untruncated IERS_2003 solid tides and IERS_2010 ocean tides as separate
+forces; eight trajectories cover independent ocean 2/0 and 4/4 truncations,
+point-mass base and forward/backward propagation. This independently checks
+OrbitForge's coefficient merge. No direct third-body attraction is included.
+
+Canonical LF SHA-256:
+
+- `ocean_tides_small.txt`: `110d3a6db9d1f19e5a504333ba20ef5336bdab47d9d6f87ff1727f8355e61dd8`
+- `ocean_tides_full.txt`: `2be9cc5a6c062ec96869f31bf3edd976f00ab232f556112a0a76e385594cf10f`
+- `ocean_tides_combined.txt`: `b0d008aa1becbd975b28c82e180074a4869ce677fc83da4569a1c524f0e78db3`
+
+The complete 100×100 model is not redistributed here; set
+`ORBITFORGE_FULL_OCEAN_FILE` to the pinned input for the optional full-model
+test. Normal CI runs the 4×4 excerpt and combined-force cases offline. These
+references do not establish numerical equivalence with STK's expanded waves.
+
+
+`gravity_secular.txt` is generated by
+`tools/validation/orekit/OrbitForgeSecularGravityReference.java`, using the
+SHA-256-pinned Orekit 13.1.2 / Hipparchus 4.0.2 JARs. Compile with the JAR
+classpath, then run
+`org.orekit.forces.gravity.potential.OrbitForgeSecularGravityReference tests/reference/propagators`.
+The package permits access to Orekit's unmodified `SecularTrendSphericalHarmonics`;
+the generator also uses its normalization factors, Holmes–Featherstone and DP853.
+It reads three pinned synthetic .grv files independently, uses BigDecimal
+for TT-to-TAI nanoseconds, and never calls OrbitForge.
+
+The three sparse 8×4 fields have reference TT JD 2451545.0, 2446431.0 and
+2451545.123456789012345; the second is unnormalized. They are test inputs,
+not STK default EGM fields or STK exports. Keep their exact raw bytes.
+The 48 coefficient / 288 acceleration / 48 trajectory rows cover both
+normalizations, multiple reference epochs, ±100-year offsets, truncations
+2/0, 2/1 and 8/4, polar/high-orbit positions, both switch states and
+forward/backward one-day propagation.
+
+`gravity_secular_tides.txt` uses `OrbitForgeSecularTideReference.java`, compiled
+with the secular, solid and ocean reference generators. Run
+`org.orekit.forces.gravity.OrbitForgeSecularTideReference tests/reference/propagators`.
+Orekit adds the evolving base field, untruncated IERS_2003 solid tides and
+IERS_2010 4×4 ocean tides as three independent forces. Eight trajectories
+exercise overlapping coefficients, independent truncation and ±1-day arcs.
+The ocean input is the pinned FES2014bv1 excerpt documented above.
+
+Normalize output to UTF-8/LF only. Inputs, integration settings, acceptance
+bounds and reproduction commands are in `docs/validation/hpop_protocol.md`.
+This comparison does not establish STK numerical equivalence.
+
+SHA-256 (raw .grv bytes; canonical LF reference output):
+
+- `gravity_secular.txt`: `7976289661051aa8895daeb01f10c52d592573f5528bcf11174a69bfeadedf75`
+- `gravity_secular_tides.txt`: `cc0a17662d760fe9fe783c403acfa0ee78db620e26a0a8da12a48c7a4f092814`
+- `gravity_secular_0.grv`: `0a5981a811726d9408b42dd432b14fb664fde81a79c971ae5e71a1d5724ba2b1`
+- `gravity_secular_1.grv`: `a15339e5c9f0856eac88da371157d1e0fcc808ec50aa1a14ac30ecf1c2639380`
+- `gravity_secular_2.grv`: `9780376f5db774fb8c864bbb255f23bddbfb1e7e9618b10b29ed858806f1b67b`
+
+- `space_weather_spline.txt`：固定 SciPy 1.16.3 自然样条的 112 节点、1112 次取样及原始 GMAT JR 的 66 个密度样例；生成器、范围与容限见[阻力验证协议](../../../docs/validation/atmospheric_drag_protocol.md)。
+
+- `space_weather_mean.txt`：SciPy 1.16.3 保持均值插值的 1314 个逐点值、218 个窗口积分及原始 GMAT JR 的 70 个密度样例；含磁暴、限幅、缺测与闰秒。LF SHA-256 `d85e283b597361fe3180c979fbfa373ba0e17322cf2e40d2da528ea28cb64ac1`；复现见[阻力验证协议](../../../docs/validation/atmospheric_drag_protocol.md)。
+
+- `weather_cssi.dat` / `weather_monthly.csv` / `weather_monthly.txt`：独立合成的 CSSI 月中和 CelesTrak 月初输入、1056 组 SciPy / NumPy 天气与历史取样、32 组原始 GMAT JR 密度；含中心 81 日均值、闰日/闰秒及来源强制规则。生成器 `tools/validation/monthly_weather_reference.py`；格式、散列、命令与容限见[阻力验证协议](../../../docs/validation/atmospheric_drag_protocol.md)。这些文件不是 STK 导出结果。
+
+- `orbit_interpolation.txt`：Hipparchus 4.0.2 的 Lagrange / Hermite 全阶数参考，118 组、826 查询，含不等间隔节点和端点 1 ns；LF SHA-256 `8d8122d657c6ba438690e617c9e3ee22bd46a60207b22c42a818c87b6d6162fa`。生成器 `tools/validation/orekit/OrbitForgeInterpolationReference.java`，依赖散列、复现及验收界限见[插值协议](../../../docs/validation/orbit_interpolation_protocol.md)。
+
+`sundman.txt` contains 36 normalized-period and 54 seven-dimensional trajectory
+references from unmodified Hipparchus 4.0.2 Legendre-Gauss quadrature and
+`DormandPrince853FieldIntegrator<Dfp>` with `DfpField(32)`. The generator is
+`tools/validation/orekit/OrbitForgeSundmanReference.java`; JAR hashes are pinned
+in `dependencies.json`. It compares two q step ceilings and a separate
+physical-time integration before writing ASCII/LF output. No OrbitForge code
+is used. Inputs, budgets, convergence and reproduction commands are in the
+[time regularization protocol](../../../docs/validation/time_regularization_protocol.md).
+This validates internal kernels; public time regularization is not yet enabled.
+Canonical LF SHA-256:
+`8817fd254063bc4a8c635358b580f31e616b15832e6ac378ad34de8e0993478a`.
+
+`drag_differential.txt`, `drag_density_differential.txt`, `drag_density_high.txt`,
+and `jacchia_roberts_precise.txt` validate fixed-epoch drag partials and JR density
+stability using Orekit automatic differentiation, unmodified GMAT/author NRL,
+and a high-precision transcription of the original GMAT equations. Sources,
+scopes, hashes and reproduction are in the
+[drag differential protocol](../../../docs/validation/drag_differential_protocol.md).

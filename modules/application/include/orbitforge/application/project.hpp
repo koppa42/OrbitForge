@@ -49,10 +49,10 @@ struct OrbitInput {
                (propagator == OrbitPropagator::mission &&
                 mission.coast_model == core::MissionCoastModel::hpop);
     }
-    [[nodiscard]] bool uses_eop_force() const { return uses_hpop() && hpop.gravity_degree > 0; }
+    [[nodiscard]] bool uses_eop_force() const { return uses_hpop() && hpop.uses_eop_force(); }
     [[nodiscard]] double mu() const {
         if (uses_hpop())
-            return core::egm96_mu;
+            return hpop.gravity_mu;
         if (propagator == OrbitPropagator::j4_secular)
             return core::j4_earth().mu.metres_cubed_per_second_squared;
         if (propagator == OrbitPropagator::sgp4)
@@ -61,6 +61,8 @@ struct OrbitInput {
     }
     std::string object_id = "satellite-1";
     core::Epoch first{0}, last{7'200'000'000'000};
+    // Display sampling; also the scientific ephemeris grid when HPOP fixed reporting is enabled.
+    // Currently whole SI seconds in [1, 60], independent of report/query sampling.
     int step_seconds = 60;
 };
 enum class LineStyle : std::uint32_t { solid, dashed, dotted, dash_dot };
@@ -128,6 +130,7 @@ struct Project {
     std::optional<core::EopDataInfo> earth_orientation;
     // Standalone UTC provenance when EOP is absent. EOP carries its own UTC identity.
     std::optional<core::TimeDataInfo> time_data;
+    std::vector<DataReference> force_data;
     std::optional<AnalysisRecord> analysis_record;
     [[nodiscard]] std::optional<core::TimeDataInfo> time_data_info() const;
     [[nodiscard]] AnalysisStatus analysis_status() const;

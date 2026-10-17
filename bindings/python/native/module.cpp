@@ -1,5 +1,6 @@
 #include <orbitforge/application/scenario.hpp>
 #include <orbitforge/runtime/demo.hpp>
+#include <orbitforge/runtime/tabulated_orbit.hpp>
 #include <orbitforge/runtime/two_body.hpp>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -122,6 +123,25 @@ PYBIND11_MODULE(_native, module) {
         },
         py::arg("initial"), py::arg("gravitational_parameter_m3_s2"), py::arg("object_id"),
         py::arg("input_revision") = 1, py::call_guard<py::gil_scoped_release>());
+    py::enum_<core::OrbitInterpolationMethod>(module, "OrbitInterpolationMethod")
+        .value("LAGRANGE", core::OrbitInterpolationMethod::lagrange)
+        .value("HERMITE", core::OrbitInterpolationMethod::hermite)
+        .value("VOP", core::OrbitInterpolationMethod::vop);
+    py::class_<core::OrbitInterpolationOptions>(module, "OrbitInterpolationOptions")
+        .def(py::init<>())
+        .def_readwrite("method", &core::OrbitInterpolationOptions::method)
+        .def_readwrite("order", &core::OrbitInterpolationOptions::order)
+        .def_readwrite("vop_mu", &core::OrbitInterpolationOptions::vop_mu);
+    module.def(
+        "make_tabulated_orbit_session",
+        [](std::vector<core::OrbitEphemerisArc> arcs, core::OrbitInterpolationOptions options,
+           std::string object_id, std::uint64_t revision) {
+            return runtime::make_tabulated_orbit_session(std::move(arcs), options,
+                                                         std::move(object_id), revision);
+        },
+        py::arg("arcs"), py::arg("options") = core::OrbitInterpolationOptions{},
+        py::arg("object_id") = "satellite-1", py::arg("input_revision") = 1,
+        py::call_guard<py::gil_scoped_release>());
     bind_time_frames(module);
     bind_ephemeris(module);
     bind_j2(module);

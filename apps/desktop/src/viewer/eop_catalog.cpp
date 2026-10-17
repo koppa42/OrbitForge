@@ -2,16 +2,38 @@
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkRequest>
 #include <QTimeZone>
 #include <algorithm>
 #include <orbitforge/application/project.hpp>
+#include <orbitforge/runtime/ephemeris.hpp>
+#include <orbitforge/runtime/gravity.hpp>
+#include <orbitforge/runtime/ocean_tides.hpp>
+#include <orbitforge/runtime/space_weather.hpp>
 
 namespace orbitforge::desktop {
 namespace {
-const char *source_url(DataProduct product) {
+QJsonArray ephemeris_kernels(const runtime::CatalogEphemeris &entry) {
+    QFile file(QString::fromStdWString(entry.manifest.wstring()));
+    if (!file.open(QIODevice::ReadOnly) || file.size() > 65536)
+        return {};
+    const auto bytes = file.readAll();
+    if (QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex().toStdString() !=
+        entry.info.content_sha256)
+        return {};
+    const auto kernels = QJsonDocument::fromJson(bytes).object().value("kernels").toArray();
+    for (const auto &value : kernels) {
+        const std::filesystem::path name(value.toObject().value("file").toString().toStdWString());
+        if (name.empty() || name.has_parent_path() || name.has_root_path() || name == "." ||
+            name == "..")
+            return {};
+    }
+    return kernels;
+}
+std::string source_url(DataProduct product) {
     switch (product) {
     case DataProduct::finals2000a:
         return "https://datacenter.iers.org/data/9/finals2000A.all";
@@ -19,16 +41,42 @@ const char *source_url(DataProduct product) {
         return "https://datacenter.iers.org/products/eop/long-term/c04_operational/eopc04.1962-now";
     case DataProduct::utc:
         return "https://hpiers.obspm.fr/iers/bul/bulc/Leap_Second.dat";
+    case DataProduct::egm2008:
+    case DataProduct::egm96:
+        return runtime::gravity_download_url(gravity_selection(product));
+    case DataProduct::fes2014bv1:
+        return runtime::ocean_tide_download_url();
+    case DataProduct::custom_ocean_tides:
+    case DataProduct::custom_gravity:
+        return {};
+    case DataProduct::space_weather:
+        return runtime::space_weather_download_url();
+    case DataProduct::de440s:
+        return std::string(runtime::de440s_url);
     }
     throw std::invalid_argument("Unknown data product");
 }
 std::string setting_key(DataProduct product, const char *suffix) {
-    const auto prefix = product == DataProduct::finals2000a ? "finals"
-                        : product == DataProduct::c04       ? "c04"
-                                                            : "utc";
+    if (ocean_product(product))
+        return "ocean-tides-" + ocean_selection(product) + "-" + suffix;
+    if (gravity_product(product))
+        return "gravity-" + gravity_selection(product) + "-" + suffix;
+    const auto prefix = product == DataProduct::space_weather ? "space-weather"
+                        : product == DataProduct::de440s      ? "de440s"
+                        : product == DataProduct::finals2000a ? "finals"
+                        : product == DataProduct::c04         ? "c04"
+                                                              : "utc";
     return std::string(prefix) + "-" + suffix;
 }
-constexpr qint64 max_download = 16 * 1024 * 1024;
+qint64 download_limit(DataProduct p) {
+    if (ocean_product(p))
+        return 128LL * 1024 * 1024;
+    if (p == DataProduct::space_weather)
+        return 32LL * 1024 * 1024;
+    if (p == DataProduct::de440s)
+        return 64LL * 1024 * 1024;
+    return gravity_product(p) ? 512LL * 1024 * 1024 : 16LL * 1024 * 1024;
+}
 QDateTime utc_datetime(const core::ITimeProvider &clock, core::Epoch epoch) {
     const auto t = clock.to_utc(epoch);
     return {QDate(t.year, t.month, t.day), QTime(t.hour, t.minute, std::min(t.second, 59)),
@@ -112,7 +160,7 @@ EopCatalog::EopCatalog(std::filesystem::path store, std::vector<std::filesystem:
         }
     }
     refresh_current();
-    for (const auto product : {DataProduct::finals2000a, DataProduct::c04, DataProduct::utc}) {
+    for (const auto product : all_data_products) {
         auto &update_ = update(product);
         const auto saved =
             QJsonDocument::fromJson(
@@ -137,6 +185,39 @@ EopCatalog::EopCatalog(std::filesystem::path store, std::vector<std::filesystem:
                 QString::fromStdString(data_.setting(setting_key(product, "last-attempt"))));
     }
     deadline_.setSingleShot(true);
+    connect(&resource_poll_, &QTimer::timeout, this, [this] {
+        if (!resource_job_.valid() ||
+            resource_job_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            return;
+        resource_poll_.stop();
+        auto &record = update(active_product_);
+        try {
+            const auto installed = resource_job_.get();
+            record.state = record.checked_sha256 == QString::fromStdString(installed.sha256)
+                               ? DataUpdateState::unchanged
+                               : DataUpdateState::updated;
+            record.checked_sha256 = QString::fromStdString(installed.sha256);
+            if (installed.acquisition == runtime::DataAcquisition::downloaded) {
+                record.checked_at = QDateTime::currentSecsSinceEpoch();
+                data_.set_setting(setting_key(active_product_, "installed-source"),
+                                  installed.sha256);
+                data_.set_settings(resource_response_);
+            }
+            record.message = status_ = QStringLiteral("数据已校验并安装，可在 HPOP 中选择。");
+            ++revision_;
+        } catch (const std::exception &e) {
+            record.state = resource_cancel_ && *resource_cancel_ ? DataUpdateState::cancelled
+                                                                 : DataUpdateState::failed;
+            record.message = status_ = QString::fromUtf8(e.what());
+        }
+        try {
+            save_update_status();
+        } catch (const std::exception &) {
+        }
+        download_.reset();
+        resource_cancel_.reset();
+        resource_response_.clear();
+    });
     connect(&deadline_, &QTimer::timeout, this, [this] {
         transfer_error_ = QStringLiteral("下载超时，请重试。");
         if (reply_)
@@ -144,19 +225,83 @@ EopCatalog::EopCatalog(std::filesystem::path store, std::vector<std::filesystem:
     });
     connect(&schedule_, &QTimer::timeout, this,
             [this] { check_updates_if_due(QDateTime::currentSecsSinceEpoch()); });
-    if (automatic) {
+    set_update_schedule_enabled(automatic);
+}
+void EopCatalog::set_update_schedule_enabled(bool enabled) {
+    if (enabled) {
         schedule_.start(60000);
-        QTimer::singleShot(1500, this,
-                           [this] { check_updates_if_due(QDateTime::currentSecsSinceEpoch()); });
+        QTimer::singleShot(1500, this, [this] {
+            if (schedule_.isActive())
+                check_updates_if_due(QDateTime::currentSecsSinceEpoch());
+        });
+    } else {
+        schedule_.stop();
     }
 }
 EopCatalog::~EopCatalog() {
+    if (resource_cancel_)
+        *resource_cancel_ = true;
+    if (resource_job_.valid())
+        resource_job_.wait();
     if (reply_) {
         disconnect(reply_, nullptr, this, nullptr);
         reply_->abort();
     }
 }
 bool EopCatalog::has_full_download(DataProduct product) const {
+    const auto present = [](const std::filesystem::path &path) {
+        std::error_code error;
+        return std::filesystem::is_regular_file(path, error) &&
+               std::filesystem::file_size(path, error) > 0 && !error;
+    };
+    if (ocean_product(product)) {
+        for (const auto &entry : data_.ocean_tide_models())
+            if (entry.selection == ocean_selection(product))
+                return present(entry.file);
+        return false;
+    }
+    if (product == DataProduct::space_weather) {
+        for (const auto &entry : data_.weather_sources())
+            if (entry.selection == "celestrak")
+                return present(entry.file);
+        return false;
+    }
+    if (product == DataProduct::de440s) {
+        for (const auto &entry : data_.ephemerides()) {
+            if (entry.selection != "de440s")
+                continue;
+            bool full_base = false, time_constants = false;
+            for (const auto &value : ephemeris_kernels(entry)) {
+                const auto kernel = value.toObject();
+                const auto path =
+                    entry.manifest.parent_path() /
+                    std::filesystem::path(kernel.value("file").toString().toStdWString());
+                if (!present(path))
+                    return false;
+                const auto kind = kernel.value("kind").toString();
+                full_base |= kind == "SPK" && kernel.value("sha256").toString() ==
+                                                  QString::fromUtf8(runtime::de440s_sha256);
+                time_constants |= kind == "LSK";
+            }
+            // A historical package is usable for its own interval, but cannot
+            // satisfy first-launch acquisition of the full DE440s policy window.
+            const QDateTime origin(QDate(2000, 1, 1), QTime(12, 0), QTimeZone::UTC);
+            const auto first =
+                origin.secsTo(QDateTime(QDate(1850, 1, 1), QTime(0, 0), QTimeZone::UTC));
+            const auto last =
+                origin.secsTo(QDateTime(QDate(2150, 1, 1), QTime(0, 0), QTimeZone::UTC));
+            return full_base && time_constants &&
+                   entry.info.first.tai_nanoseconds() <= first * 1000000000LL &&
+                   entry.info.last.tai_nanoseconds() >= last * 1000000000LL;
+        }
+        return false;
+    }
+    if (gravity_product(product)) {
+        for (const auto &entry : data_.gravity_models())
+            if (entry.selection == gravity_selection(product))
+                return present(entry.file);
+        return false;
+    }
     if (product == DataProduct::utc)
         return !time_file_.empty();
     const auto index = current_index(product);
@@ -173,6 +318,28 @@ std::optional<std::size_t> EopCatalog::current_index(DataProduct product) const 
     return std::nullopt;
 }
 std::string EopCatalog::current_hash(DataProduct product) const {
+    if (ocean_product(product)) {
+        for (const auto &entry : data_.ocean_tide_models())
+            if (entry.selection == ocean_selection(product))
+                return entry.info.sha256;
+        return {};
+    }
+    if (product == DataProduct::space_weather) {
+        for (const auto &entry : data_.weather_sources())
+            if (entry.selection == "celestrak")
+                return entry.info.sha256;
+        return {};
+    }
+    if (product == DataProduct::de440s) {
+        const auto entries = data_.ephemerides();
+        return entries.empty() ? std::string{} : entries.front().info.content_sha256;
+    }
+    if (gravity_product(product)) {
+        for (const auto &model : data_.gravity_models())
+            if (model.selection == gravity_selection(product))
+                return model.info.sha256;
+        return {};
+    }
     if (product == DataProduct::utc)
         return time_->data_info().sha256;
     const auto index = current_index(product);
@@ -181,15 +348,15 @@ std::string EopCatalog::current_hash(DataProduct product) const {
 std::vector<DataInventoryItem> EopCatalog::inventory() const {
     const auto &clock = time_;
     const auto entries = data_.snapshots();
-    std::vector<DataInventoryItem> items(3);
+    std::vector<DataInventoryItem> items(all_data_products.size());
     items[0].online_updates = true;
     items[0].raw_import = true;
     items[0].manifest_import = true;
-    items[0].source_url = source_url(DataProduct::finals2000a);
+    items[0].source_url = QString::fromStdString(source_url(DataProduct::finals2000a));
     items[1].product = DataProduct::c04;
     items[1].online_updates = true;
     items[1].raw_import = true;
-    items[1].source_url = source_url(DataProduct::c04);
+    items[1].source_url = QString::fromStdString(source_url(DataProduct::c04));
     items[1].manifest_import = true;
     for (const auto index : current_) {
         const auto &info = providers_[index]->data_info();
@@ -262,6 +429,120 @@ std::vector<DataInventoryItem> EopCatalog::inventory() const {
         if (!error)
             utc.file_size = size;
     }
+    const auto gravity = data_.gravity_models();
+    for (auto p : {DataProduct::egm2008, DataProduct::egm96, DataProduct::custom_gravity}) {
+        auto &item = items[static_cast<std::size_t>(p)];
+        item.product = p;
+        item.online_updates = p != DataProduct::custom_gravity;
+        item.raw_import = true;
+        item.source_url = QString::fromStdString(source_url(p));
+        for (const auto &entry : gravity) {
+            if (entry.selection != gravity_selection(p))
+                continue;
+            item.gravity = entry.info;
+            item.file = entry.file;
+            item.acquired_at = entry.acquired_at_unix_seconds;
+            item.acquisition = entry.acquisition;
+            item.installation = entry.acquisition == runtime::DataAcquisition::downloaded
+                                    ? DataInstallation::downloaded
+                                    : DataInstallation::local_file;
+            item.sha256 = QString::fromStdString(entry.info.sha256);
+            item.source_url = QString::fromStdString(entry.info.source_url);
+            std::error_code error;
+            auto size = std::filesystem::file_size(entry.file, error);
+            if (!error)
+                item.file_size = size;
+        }
+    }
+    auto &ephemeris = items[static_cast<std::size_t>(DataProduct::de440s)];
+    ephemeris.product = DataProduct::de440s;
+    ephemeris.online_updates = true;
+    ephemeris.raw_import = true;
+    ephemeris.source_url = QString::fromStdString(source_url(DataProduct::de440s));
+    for (const auto &entry : data_.ephemerides()) {
+        if (entry.selection != "de440s")
+            continue;
+        ephemeris.ephemeris = entry.info;
+        ephemeris.file = entry.manifest;
+        ephemeris.sha256 = QString::fromStdString(entry.info.content_sha256);
+        for (const auto &value : ephemeris_kernels(entry)) {
+            const auto kernel = value.toObject();
+            if (kernel.value("kind").toString() != "SPK")
+                continue;
+            ephemeris.file = entry.manifest.parent_path() /
+                             std::filesystem::path(kernel.value("file").toString().toStdWString());
+            ephemeris.sha256 = kernel.value("sha256").toString();
+            ephemeris.source_url = kernel.value("source_url").toString();
+            break;
+        }
+        ephemeris.identity_sha256 = QString::fromStdString(entry.info.content_sha256);
+        ephemeris.acquired_at = entry.acquired_at_unix_seconds;
+        ephemeris.acquisition = entry.acquisition;
+        ephemeris.installation = entry.acquisition == runtime::DataAcquisition::downloaded
+                                     ? DataInstallation::downloaded
+                                     : DataInstallation::local_file;
+        // These are TAI calendar labels, not UTC conversions before UTC existed.
+        const auto calendar = [](core::Epoch epoch) {
+            return QDateTime(QDate(2000, 1, 1), QTime(12, 0), QTimeZone::UTC)
+                .addSecs(epoch.tai_nanoseconds() / 1000000000LL);
+        };
+        ephemeris.first = calendar(entry.info.first);
+        ephemeris.last = calendar(entry.info.last);
+        std::error_code error;
+        const auto size = std::filesystem::file_size(ephemeris.file, error);
+        if (!error)
+            ephemeris.file_size = size;
+    }
+    auto &weather = items[static_cast<std::size_t>(DataProduct::space_weather)];
+    weather.product = DataProduct::space_weather;
+    weather.online_updates = weather.raw_import = true;
+    weather.source_url = QString::fromStdString(runtime::space_weather_download_url());
+    for (const auto &entry : data_.weather_sources()) {
+        if (entry.selection != "celestrak")
+            continue;
+        weather.file = entry.file;
+        weather.sha256 = weather.identity_sha256 = QString::fromStdString(entry.info.sha256);
+        weather.acquired_at = entry.acquired_at_unix_seconds;
+        weather.acquisition = entry.acquisition;
+        weather.installation = entry.acquisition == runtime::DataAcquisition::downloaded
+                                   ? DataInstallation::downloaded
+                                   : DataInstallation::local_file;
+        const auto date = [](core::UtcDateTime u) {
+            return QDateTime(QDate(u.year, u.month, u.day), QTime(0, 0), QTimeZone::UTC);
+        };
+        weather.first = date(entry.info.first);
+        weather.last = date(entry.info.last);
+        std::error_code error;
+        const auto size = std::filesystem::file_size(entry.file, error);
+        if (!error)
+            weather.file_size = size;
+    }
+    const auto oceans = data_.ocean_tide_models();
+    for (auto product : {DataProduct::fes2014bv1, DataProduct::custom_ocean_tides}) {
+        auto &item = items[static_cast<std::size_t>(product)];
+        item.product = product;
+        item.raw_import = true;
+        item.online_updates = product == DataProduct::fes2014bv1;
+        item.source_url = QString::fromStdString(source_url(product));
+        for (const auto &entry : oceans) {
+            if (entry.selection != ocean_selection(product))
+                continue;
+            item.ocean_tides = entry.info;
+            item.file = entry.file;
+            item.sha256 = item.identity_sha256 = QString::fromStdString(entry.info.sha256);
+            item.acquired_at = entry.acquired_at_unix_seconds;
+            item.acquisition = entry.acquisition;
+            item.installation = entry.acquisition == runtime::DataAcquisition::downloaded
+                                    ? DataInstallation::downloaded
+                                    : DataInstallation::local_file;
+            std::error_code error;
+            const auto size = std::filesystem::file_size(item.file, error);
+            if (error)
+                item.installation = DataInstallation::missing;
+            else
+                item.file_size = size;
+        }
+    }
     return items;
 }
 DataUpdateStatus EopCatalog::update_status(DataProduct product) const {
@@ -291,7 +572,9 @@ void EopCatalog::check_updates_if_due(qint64 now, QUrl source) {
     try {
         if (downloading())
             return;
-        for (const auto product : {DataProduct::utc, DataProduct::finals2000a, DataProduct::c04}) {
+        for (const auto product : {DataProduct::utc, DataProduct::finals2000a, DataProduct::c04,
+                                   DataProduct::egm2008, DataProduct::egm96, DataProduct::de440s,
+                                   DataProduct::space_weather, DataProduct::fes2014bv1}) {
             if ((!source.isEmpty() && product != DataProduct::finals2000a) ||
                 !automatic_updates(product))
                 continue;
@@ -379,6 +662,8 @@ void EopCatalog::set_preferred_product(DataProduct product) {
     refresh_current();
 }
 bool EopCatalog::automatic_updates(DataProduct product) const {
+    if (force_product(product))
+        return data_.setting(setting_key(product, "auto-update")) == "1";
     return data_.setting(setting_key(product, "auto-update")) != "0";
 }
 void EopCatalog::set_automatic_updates(bool enabled, DataProduct product) {
@@ -422,8 +707,24 @@ EopCatalog::Provider EopCatalog::for_interval(core::Epoch first, core::Epoch las
 void EopCatalog::import_raw(const std::filesystem::path &source, DataProduct product) {
     if (downloading())
         throw std::runtime_error("请等待当前下载完成，或先取消下载。");
+    if (force_product(product)) {
+        start_resource_install(source, product, {}, runtime::DataAcquisition::imported);
+        return;
+    }
     install_source(source, product, source_url(product), runtime::DataAcquisition::imported);
     status_ = QStringLiteral("本地文件已导入。");
+}
+void EopCatalog::import_ephemeris_snapshot(const std::filesystem::path &source) {
+    if (downloading())
+        throw std::runtime_error("请等待当前操作完成，或先取消。");
+    start_resource_install(source, DataProduct::de440s, {}, runtime::DataAcquisition::imported,
+                           EphemerisImport::snapshot);
+}
+void EopCatalog::import_planetary_centres(const std::filesystem::path &source) {
+    if (downloading())
+        throw std::runtime_error("请等待当前操作完成，或先取消。");
+    start_resource_install(source, DataProduct::de440s, {}, runtime::DataAcquisition::imported,
+                           EphemerisImport::planetary_centres);
 }
 void EopCatalog::install_source(const std::filesystem::path &source, DataProduct product,
                                 const std::string &url, runtime::DataAcquisition acquisition) {
@@ -482,6 +783,8 @@ void EopCatalog::install_source(const std::filesystem::path &source, DataProduct
     refresh_current();
 }
 void EopCatalog::cancel_download() {
+    if (resource_cancel_)
+        *resource_cancel_ = true;
     if (reply_) {
         cancelled_ = true;
         reply_->abort();
@@ -502,7 +805,7 @@ void EopCatalog::start_download(QUrl url, DataProduct product) {
         data_.set_setting(setting_key(product, "last-attempt"),
                           std::to_string(*update_.attempted_at));
         if (url.isEmpty())
-            url = QUrl(source_url(product));
+            url = QUrl(QString::fromStdString(source_url(product)));
         if (url.scheme() != "https" && !(url.scheme() == "http" && url.host() == "127.0.0.1"))
             throw std::runtime_error("数据源必须使用 HTTPS。");
         download_ = std::make_unique<QTemporaryFile>(
@@ -541,7 +844,7 @@ void EopCatalog::start_download(QUrl url, DataProduct product) {
         save_update_status();
         reply_ = network_.get(request);
         reply_->setReadBufferSize(64 * 1024);
-        deadline_.start(120000);
+        deadline_.start(force_product(product) ? 1800000 : 120000);
         connect(reply_, &QNetworkReply::metaDataChanged, this, [this] {
             // Progress notifications may be delayed until the next body chunk arrives.
             // Use an uncompressed Content-Length as soon as headers are available.
@@ -552,6 +855,11 @@ void EopCatalog::start_download(QUrl url, DataProduct product) {
                     reply_->header(QNetworkRequest::ContentLengthHeader).toLongLong(&valid);
                 if (valid && length > 0)
                     total_ = length;
+                if (valid && length > download_limit(active_product_)) {
+                    transfer_error_ = QStringLiteral("数据源文件超过 %1 MiB 限制。")
+                                          .arg(download_limit(active_product_) / (1024 * 1024));
+                    reply_->abort();
+                }
             }
         });
         connect(reply_, &QNetworkReply::downloadProgress, this, [this](qint64, qint64 total) {
@@ -566,72 +874,88 @@ void EopCatalog::start_download(QUrl url, DataProduct product) {
                 update_.state = DataUpdateState::downloading;
                 update_.message = status_ = QStringLiteral("正在下载完整文件…");
             }
-            if (received_ > max_download || download_->write(bytes) != bytes.size()) {
-                transfer_error_ = QStringLiteral("下载超过 16 MiB 限制，或临时文件写入失败。");
+            if (received_ > download_limit(active_product_) ||
+                download_->write(bytes) != bytes.size()) {
+                transfer_error_ = QStringLiteral("下载超过 %1 MiB 限制，或临时文件写入失败。")
+                                      .arg(download_limit(active_product_) / (1024 * 1024));
                 reply_->abort();
             }
         });
-        connect(reply_, &QNetworkReply::finished, this,
-                [this, url, conditional, current_hash, product] {
-                    auto &update_ = update(product);
-                    deadline_.stop();
-                    auto *finished = reply_;
-                    reply_ = nullptr;
-                    try {
-                        if (cancelled_)
-                            throw std::runtime_error("下载已取消，已有数据和场景保持不变。");
-                        if (!transfer_error_.isEmpty())
-                            throw std::runtime_error(transfer_error_.toStdString());
-                        const auto http =
-                            finished->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-                        if (finished->error() != QNetworkReply::NoError ||
-                            (http != 200 && !(http == 304 && conditional)))
-                            throw std::runtime_error(download_error(*finished, http).toStdString());
-                        if (!download_->flush() || !download_->seek(0))
-                            throw std::runtime_error("Cannot flush download");
-                        if (http == 304) {
-                            if (this->current_hash(product) != current_hash)
-                                throw std::runtime_error("检查期间本地文件已更换，请重新检查。");
-                            update_.state = DataUpdateState::unchanged;
-                            update_.checked_sha256 = QString::fromStdString(current_hash);
-                            status_ = QStringLiteral("数据已是最新，未重复下载。");
-                        } else {
-                            const auto hash = QCryptographicHash::hash(download_->readAll(),
-                                                                       QCryptographicHash::Sha256)
-                                                  .toHex()
-                                                  .toStdString();
-                            install_source(
+        connect(
+            reply_, &QNetworkReply::finished, this,
+            [this, url, conditional, current_hash, product] {
+                auto &update_ = update(product);
+                deadline_.stop();
+                auto *finished = reply_;
+                reply_ = nullptr;
+                try {
+                    if (cancelled_)
+                        throw std::runtime_error("下载已取消，已有数据和场景保持不变。");
+                    if (!transfer_error_.isEmpty())
+                        throw std::runtime_error(transfer_error_.toStdString());
+                    const auto http =
+                        finished->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+                    if (finished->error() != QNetworkReply::NoError ||
+                        (http != 200 && !(http == 304 && conditional)))
+                        throw std::runtime_error(download_error(*finished, http).toStdString());
+                    if (!download_->flush() || !download_->seek(0))
+                        throw std::runtime_error("Cannot flush download");
+                    if (http == 304) {
+                        if (this->current_hash(product) != current_hash)
+                            throw std::runtime_error("检查期间本地文件已更换，请重新检查。");
+                        update_.state = DataUpdateState::unchanged;
+                        update_.checked_sha256 = QString::fromStdString(current_hash);
+                        status_ = QStringLiteral("数据已是最新，未重复下载。");
+                    } else {
+                        if (force_product(product)) {
+                            resource_response_ = {
+                                {setting_key(product, "source-url"), url.toString().toStdString()},
+                                {setting_key(product, "etag"),
+                                 finished->rawHeader("ETag").toStdString()},
+                                {setting_key(product, "last-modified"),
+                                 finished->rawHeader("Last-Modified").toStdString()}};
+                            start_resource_install(
                                 std::filesystem::path(download_->fileName().toStdWString()),
                                 product, url.toString().toStdString(),
                                 runtime::DataAcquisition::downloaded);
-                            data_.set_setting(setting_key(product, "installed-source"), hash);
-                            data_.set_setting(setting_key(product, "source-url"),
-                                              url.toString().toStdString());
-                            data_.set_setting(setting_key(product, "etag"),
-                                              finished->rawHeader("ETag").toStdString());
-                            data_.set_setting(setting_key(product, "last-modified"),
-                                              finished->rawHeader("Last-Modified").toStdString());
-                            update_.state = hash == current_hash ? DataUpdateState::unchanged
-                                                                 : DataUpdateState::updated;
-                            update_.checked_sha256 = QString::fromStdString(hash);
-                            status_ = hash == current_hash
-                                          ? QStringLiteral("检查完成，文件内容没有变化。")
-                                          : QStringLiteral("完整文件已下载并通过校验。");
+                            finished->deleteLater();
+                            return;
                         }
-                        update_.checked_at = QDateTime::currentSecsSinceEpoch();
-                    } catch (const std::exception &error) {
-                        update_.state =
-                            cancelled_ ? DataUpdateState::cancelled : DataUpdateState::failed;
-                        status_ = QString::fromUtf8(error.what());
+                        const auto hash = QCryptographicHash::hash(download_->readAll(),
+                                                                   QCryptographicHash::Sha256)
+                                              .toHex()
+                                              .toStdString();
+                        install_source(std::filesystem::path(download_->fileName().toStdWString()),
+                                       product, url.toString().toStdString(),
+                                       runtime::DataAcquisition::downloaded);
+                        data_.set_setting(setting_key(product, "installed-source"), hash);
+                        data_.set_setting(setting_key(product, "source-url"),
+                                          url.toString().toStdString());
+                        data_.set_setting(setting_key(product, "etag"),
+                                          finished->rawHeader("ETag").toStdString());
+                        data_.set_setting(setting_key(product, "last-modified"),
+                                          finished->rawHeader("Last-Modified").toStdString());
+                        update_.state = hash == current_hash ? DataUpdateState::unchanged
+                                                             : DataUpdateState::updated;
+                        update_.checked_sha256 = QString::fromStdString(hash);
+                        status_ = hash == current_hash
+                                      ? QStringLiteral("检查完成，文件内容没有变化。")
+                                      : QStringLiteral("完整文件已下载并通过校验。");
                     }
-                    update_.message = status_;
-                    try {
-                        save_update_status();
-                    } catch (const std::exception &) {
-                    }
-                    download_.reset();
-                    finished->deleteLater();
-                });
+                    update_.checked_at = QDateTime::currentSecsSinceEpoch();
+                } catch (const std::exception &error) {
+                    update_.state =
+                        cancelled_ ? DataUpdateState::cancelled : DataUpdateState::failed;
+                    status_ = QString::fromUtf8(error.what());
+                }
+                update_.message = status_;
+                try {
+                    save_update_status();
+                } catch (const std::exception &) {
+                }
+                download_.reset();
+                finished->deleteLater();
+            });
     } catch (const std::exception &error) {
         if (!reply_)
             download_.reset();
@@ -642,5 +966,49 @@ void EopCatalog::start_download(QUrl url, DataProduct product) {
         } catch (const std::exception &) {
         }
     }
+}
+void EopCatalog::start_resource_install(const std::filesystem::path &file, DataProduct product,
+                                        const std::string &url,
+                                        runtime::DataAcquisition acquisition,
+                                        EphemerisImport ephemeris_import) {
+    active_product_ = product;
+    last_installed_.reset();
+    total_ = -1;
+    resource_cancel_ = std::make_shared<std::atomic_bool>(false);
+    auto &record = update(product);
+    record.attempted_at = QDateTime::currentSecsSinceEpoch();
+    record.state = DataUpdateState::checking;
+    record.message = status_ = QStringLiteral("正在后台校验完整数据与覆盖范围，可取消…");
+    resource_job_ = std::async(std::launch::async, [root = store_, file, product, url, acquisition,
+                                                    cancel = resource_cancel_, ephemeris_import] {
+        runtime::DataCatalog catalog(root);
+        const auto checkpoint = [cancel] {
+            if (*cancel)
+                throw std::runtime_error("操作已取消，已有数据保持不变。");
+        };
+        if (ocean_product(product)) {
+            const auto installed = catalog.install_ocean_tides(file, ocean_selection(product), url,
+                                                               acquisition, checkpoint);
+            return InstalledResource{installed.info.sha256, acquisition};
+        }
+        if (product == DataProduct::space_weather) {
+            const auto installed =
+                catalog.install_space_weather(file, "celestrak", url, acquisition, checkpoint);
+            return InstalledResource{installed.info.sha256, acquisition};
+        }
+        if (product == DataProduct::de440s) {
+            const auto installed =
+                ephemeris_import == EphemerisImport::snapshot
+                    ? catalog.install_ephemeris_snapshot(file, acquisition, checkpoint)
+                : ephemeris_import == EphemerisImport::planetary_centres
+                    ? catalog.install_planetary_centres(file, url, acquisition, checkpoint)
+                    : catalog.install_de440s(file, acquisition, checkpoint);
+            return InstalledResource{installed.info.content_sha256, acquisition};
+        }
+        const auto installed =
+            catalog.install_gravity(file, gravity_selection(product), url, acquisition, checkpoint);
+        return InstalledResource{installed.info.sha256, acquisition};
+    });
+    resource_poll_.start(50);
 }
 } // namespace orbitforge::desktop

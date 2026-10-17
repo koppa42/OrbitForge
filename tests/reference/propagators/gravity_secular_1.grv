@@ -1,0 +1,27 @@
+stk.v.9.0
+# Synthetic sparse field for explicit metadata tests; not an STK default model.
+Model SecularReference1
+CentralBody Earth
+Degree 8
+Order 4
+Gm 3.986004415e14
+RefDistance 6378136.3
+Normalized No
+IncludesPermTide No
+Begin SecularVariations
+RefEpochTDT 2446431.0
+LinearRate Cos 2 0 2.5999992211777681e-11
+LinearRate Cos 2 1 -4.3506512922396647e-12
+LinearRate Sin 2 1 2.073337084669704e-11
+LinearRate Cos 3 0 -1.5874507866387545e-11
+LinearRate Cos 8 4 -5.7428738143255692e-15
+LinearRate Sin 8 4 2.7409170477462947e-15
+End SecularVariations
+Begin Coefficients
+2 0 -0.001082626319664393 0
+2 1 -2.8789176206808466e-10 1.8693599617694465e-09
+2 2 1.574460374564035e-06 -9.0380380663855704e-07
+3 0 2.5326564853322355e-06 0
+3 1 2.1926385291685853e-06 2.6842489029677887e-07
+8 4 1.3051985941649023e-11 -2.6103971883298045e-11
+End Coefficients

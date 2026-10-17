@@ -27,6 +27,40 @@ class ReportsTest(unittest.TestCase):
         definition.format.time_scale = of.ReportTimeScale.TAI
         return project, definition
 
+    def test_hpop_step_control_uses_only_effective_settings_in_report_identity(self):
+        fixture = Path(__file__).resolve().parents[3] / "tests/integration/fixtures/project-current.orbitforge"
+        for method in (of.HpopIntegrator.RKF78, of.HpopIntegrator.RKV89,
+                       of.HpopIntegrator.BULIRSCH_STOER, of.HpopIntegrator.RK4,
+                       of.HpopIntegrator.GAUSS_JACKSON):
+            project = of.load_project(fixture)
+            satellites = project.satellites
+            satellite = satellites[1]
+            orbit = satellite.orbit
+            settings = orbit.hpop
+            settings.integrator = method
+            settings.time_regularization = False
+            settings.step_control = of.HpopStepControl.FIXED
+            def identity():
+                orbit.hpop = settings
+                satellite.orbit = orbit
+                satellites[1] = satellite
+                project.satellites = satellites
+                return of.report_input_sha256(project)
+            original = identity()
+            settings.relative_tolerance = 1e-6
+            settings.position_tolerance_m = 1e-4
+            settings.velocity_tolerance_mps = 1e-7
+            settings.max_step_seconds = 100
+            self.assertEqual(identity(), original)
+            settings.fixed_step_seconds = 7.1
+            changed = identity()
+            self.assertNotEqual(changed, original)
+            settings.step_control = of.HpopStepControl.RELATIVE_ERROR
+            if method in (of.HpopIntegrator.RK4, of.HpopIntegrator.GAUSS_JACKSON):
+                self.assertEqual(identity(), changed)
+            else:
+                self.assertNotEqual(identity(), changed)
+
     def test_typed_samples_csv_and_immutable_result(self):
         project, definition = self.inputs()
         result = of.generate_report(project, definition)
@@ -158,7 +192,7 @@ class ReportsTest(unittest.TestCase):
             path = Path(directory) / 'derived.orbitforge'
             project.save(path)
             raw = path.read_bytes()
-            self.assertEqual(struct.unpack_from('<I', raw, 8)[0], 14)
+            self.assertEqual(struct.unpack_from('<I', raw, 8)[0], 40)
             self.assertEqual(of.load_project(path).reports[0].query.kind, of.ReportKind.GEODETIC_POSITION)
 
 

@@ -1,4 +1,5 @@
 #include "../src/viewer/eop_catalog.hpp"
+#include "../src/viewer/initial_data_setup.hpp"
 #include "../src/viewer/workbench_style.hpp"
 #include "window_show_observer.hpp"
 #include <QApplication>
@@ -170,7 +171,7 @@ TEST(DataCenterDialog, GroupedSourcesKeepDownloadStateAndPriorityIndependent) {
         auto *status = dialog->findChild<QLabel *>("dataCenterStatus");
         ASSERT_TRUE(list && priority && checked && badge && progress && cancel && download &&
                     status);
-        ASSERT_EQ(list->topLevelItemCount(), 2);
+        ASSERT_EQ(list->topLevelItemCount(), 6);
         auto *group = list->topLevelItem(0);
         ASSERT_EQ(group->childCount(), 2);
         auto *finals = group->child(0);
@@ -455,5 +456,404 @@ TEST(DataCenterDialog, ResponsiveNavigationPreservesSelectionSettingsAndDownload
     });
     show_data_center(nullptr, catalog);
 }
+TEST(DataCenterDialog, GravityHasItsOwnGroupAndStaticValidityWithoutImplicitDownloads) {
+    (void)test_app();
+    QTemporaryDir temporary;
+    EopCatalog catalog(std::filesystem::path(temporary.path().toStdWString()), {}, {}, false);
+    bool inspected = false;
+    QTimer::singleShot(0, [&] {
+        auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+        ASSERT_NE(dialog, nullptr);
+        auto *tree = dialog->findChild<QTreeWidget *>("dataInventory");
+        ASSERT_EQ(tree->topLevelItemCount(), 6);
+        auto *gravity = tree->topLevelItem(2);
+        ASSERT_EQ(gravity->childCount(), 3);
+        tree->setCurrentItem(gravity->child(0));
+        dialog->resize(1020, 720);
+        QApplication::processEvents();
+        EXPECT_EQ(dialog->findChild<QLabel *>("dataName")->text(), QStringLiteral("EGM2008"));
+        EXPECT_FALSE(dialog->findChild<QCheckBox *>("dataAutoUpdate")->isChecked());
+        EXPECT_TRUE(dialog->findChild<QPushButton *>("downloadEop")->isVisible());
+        bool static_validity = false;
+        for (const auto *label : dialog->findChildren<QLabel *>())
+            static_validity |= label->text() == QStringLiteral("无固定有效期");
+        EXPECT_TRUE(static_validity);
+        const auto output = qEnvironmentVariable("ORBITFORGE_DATA_UI_CAPTURE");
+        if (!output.isEmpty()) {
+            QDir{}.mkpath(output);
+            EXPECT_TRUE(dialog->grab().save(output + "/gravity-download.png"));
+            dialog->resize(500, 660);
+            tree->itemActivated(gravity->child(0), 0);
+            QEventLoop settled;
+            QTimer::singleShot(60, &settled, &QEventLoop::quit);
+            settled.exec();
+            EXPECT_TRUE(dialog->findChild<QLabel *>("dataName")->isVisible());
+            EXPECT_TRUE(dialog->findChild<QPushButton *>("downloadEop")->isVisible());
+            EXPECT_TRUE(dialog->grab().save(output + "/gravity-compact.png"));
+        }
+        EXPECT_FALSE(catalog.downloading());
+        inspected = true;
+        dialog->reject();
+    });
+    show_data_center(nullptr, catalog);
+    EXPECT_TRUE(inspected);
+}
+TEST(DataCenterDialog, EphemerisGroupAndDetailsRemainReadableAtCompactWidth) {
+    (void)test_app();
+    QTemporaryDir temporary;
+    EopCatalog catalog(std::filesystem::path(temporary.path().toStdWString()), {}, {}, false);
+    QTimer::singleShot(0, [&] {
+        auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+        ASSERT_TRUE(dialog);
+        auto *tree = dialog->findChild<QTreeWidget *>("dataInventory");
+        ASSERT_EQ(tree->topLevelItemCount(), 6);
+        auto *group = tree->topLevelItem(3);
+        ASSERT_EQ(group->childCount(), 1);
+        EXPECT_EQ(tree->currentItem(), group->child(0));
+        dialog->resize(1020, 720);
+        QApplication::processEvents();
+        EXPECT_EQ(dialog->findChild<QLabel *>("dataName")->text(), QStringLiteral("DE440s"));
+        EXPECT_TRUE(dialog->findChild<QPushButton *>("downloadEop")->isVisible());
+        auto *centres = dialog->findChild<QPushButton *>("importPlanetaryCentres");
+        ASSERT_TRUE(centres);
+        EXPECT_TRUE(centres->isVisible());
+        EXPECT_TRUE(centres->isEnabled());
+        auto *tabs = dialog->findChild<QTabWidget *>("dataPages");
+        tabs->setCurrentIndex(1);
+        EXPECT_FALSE(dialog->findChild<QCheckBox *>("dataAutoUpdate")->isChecked());
+        tabs->setCurrentIndex(2);
+        EXPECT_TRUE(dialog->findChild<QPushButton *>("importEopSnapshot")->isVisible());
+        EXPECT_EQ(dialog->findChild<QPushButton *>("importEopSnapshot")->text(),
+                  QStringLiteral("导入星历数据包…"));
+        tabs->setCurrentIndex(0);
+        const auto output = qEnvironmentVariable("ORBITFORGE_DATA_UI_CAPTURE");
+        if (!output.isEmpty()) {
+            QDir{}.mkpath(output);
+            EXPECT_TRUE(dialog->grab().save(output + "/ephemeris-wide.png"));
+        }
+        dialog->resize(430, 660);
+        tree->itemActivated(group->child(0), 0);
+        QEventLoop settled;
+        QTimer::singleShot(60, &settled, &QEventLoop::quit);
+        settled.exec();
+        EXPECT_TRUE(dialog->findChild<QLabel *>("dataName")->isVisible());
+        for (auto *scroll : dialog->findChildren<QScrollArea *>())
+            if (scroll->isVisible())
+                EXPECT_EQ(scroll->horizontalScrollBar()->maximum(), 0);
+        if (!output.isEmpty())
+            EXPECT_TRUE(dialog->grab().save(output + "/ephemeris-compact.png"));
+        EXPECT_TRUE(centres->isVisible());
+        EXPECT_GE(centres->width(), centres->sizeHint().width());
+        for (auto *ancestor = centres->parentWidget(); ancestor;
+             ancestor = ancestor->parentWidget())
+            if (auto *scroll = qobject_cast<QScrollArea *>(ancestor)) {
+                scroll->ensureWidgetVisible(centres);
+                break;
+            }
+        QApplication::processEvents();
+        EXPECT_FALSE(centres->visibleRegion().isEmpty());
+        if (!output.isEmpty()) {
+            qInfo() << "ephemeris compact logical width" << dialog->width() << "DPR"
+                    << dialog->devicePixelRatioF();
+            EXPECT_TRUE(dialog->grab().save(output + "/ephemeris-compact-import.png"));
+        }
+        tabs->setCurrentIndex(2);
+        QApplication::processEvents();
+        auto *package = dialog->findChild<QPushButton *>("importEopSnapshot");
+        for (auto *ancestor = package->parentWidget(); ancestor;
+             ancestor = ancestor->parentWidget())
+            if (auto *scroll = qobject_cast<QScrollArea *>(ancestor)) {
+                scroll->ensureWidgetVisible(package);
+                break;
+            }
+        QApplication::processEvents();
+        EXPECT_FALSE(package->visibleRegion().isEmpty());
+        if (!output.isEmpty())
+            EXPECT_TRUE(dialog->grab().save(output + "/ephemeris-compact-package.png"));
+        EXPECT_FALSE(catalog.downloading());
+        dialog->reject();
+    });
+    show_data_center(nullptr, catalog, DataProduct::de440s);
+}
+
+QByteArray initial_fixture(const std::filesystem::path &path) {
+    QFile file(QString::fromStdWString(path.wstring()));
+    if (!file.open(QIODevice::ReadOnly))
+        throw std::runtime_error("Missing initial data fixture");
+    return file.readAll();
+}
+QByteArray initial_gravity() {
+    return "stk.v.6.0\nModel Local\nDegree 21\nOrder 21\nGm 3.986004415e14\nRefDistance 6378136.3\n"
+           "Normalized Yes\nIncludesPermTide No\nBEGIN Coefficients\n2 0 -0.000484 0\nEND "
+           "Coefficients\n";
+}
+void finish_initial_cancel(EopCatalog &catalog) {
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (catalog.downloading() && elapsed.elapsed() < 5000)
+        QApplication::processEvents(QEventLoop::AllEvents, 20);
+    EXPECT_FALSE(catalog.downloading());
+}
+void capture_initial_setup(QDialog *dialog, const QString &name) {
+    const auto output = qEnvironmentVariable("ORBITFORGE_DATA_UI_CAPTURE");
+    if (!output.isEmpty()) {
+        EXPECT_TRUE(QDir{}.mkpath(output));
+        QEventLoop settled;
+        QTimer::singleShot(60, &settled, &QEventLoop::quit);
+        settled.exec();
+        EXPECT_TRUE(dialog->grab().save(output + '/' + name + ".png"));
+    }
+}
+TEST(DataCenterDialog, InitialSetupDownloadsInDependencyOrderSkipsInstalledAndRepairsMissingFiles) {
+    (void)test_app();
+    const auto expected = initial_data_products();
+    ASSERT_GE(expected.size(), 4U);
+    EXPECT_EQ(expected[0], DataProduct::utc);
+    EXPECT_EQ(expected[1], DataProduct::c04);
+    EXPECT_EQ(expected[2], DataProduct::finals2000a);
+    EXPECT_EQ(expected[3], DataProduct::egm2008);
+    QTemporaryDir temporary;
+    EopCatalog catalog(std::filesystem::path(temporary.path().toStdWString()), {}, {}, false);
+    DownloadServer clock(initial_fixture(ORBITFORGE_TEST_TIME));
+    DownloadServer finals(initial_fixture(
+        std::filesystem::path(ORBITFORGE_TEST_FINALS).parent_path() / "finals2000A.data"));
+    DownloadServer gravity(initial_gravity());
+    clock.hold = finals.hold = gravity.hold = false;
+    const std::vector required{DataProduct::utc, DataProduct::finals2000a,
+                               DataProduct::custom_gravity};
+    std::vector<DataProduct> requests;
+    const auto download = [&](DataProduct product) {
+        requests.push_back(product);
+        if (product != DataProduct::utc)
+            EXPECT_TRUE(catalog.has_full_download(DataProduct::utc));
+        catalog.start_download(product == DataProduct::utc           ? clock.url()
+                               : product == DataProduct::finals2000a ? finals.url()
+                                                                     : gravity.url(),
+                               product);
+    };
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    QObject::connect(&timeout, &QTimer::timeout, [&] {
+        ADD_FAILURE() << "Initial data setup timed out";
+        if (auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget()))
+            dialog->reject();
+    });
+    timeout.start(5000);
+    EXPECT_TRUE(prepare_initial_data(nullptr, catalog, required, download));
+    timeout.stop();
+    EXPECT_EQ(requests, required);
+    requests.clear();
+    WindowShowObserver windows;
+    EXPECT_TRUE(prepare_initial_data(nullptr, catalog, required, download));
+    EXPECT_TRUE(windows.shown.empty());
+    EXPECT_TRUE(requests.empty());
+    const auto file = catalog.data().gravity_models().front().file;
+    ASSERT_TRUE(QFile::remove(QString::fromStdWString(file.wstring())));
+    EXPECT_FALSE(catalog.has_full_download(DataProduct::custom_gravity));
+    timeout.start(5000);
+    EXPECT_TRUE(prepare_initial_data(nullptr, catalog, required, download));
+    timeout.stop();
+    EXPECT_EQ(requests, std::vector{DataProduct::custom_gravity});
+    EXPECT_TRUE(std::filesystem::is_regular_file(file));
+}
+TEST(DataCenterDialog, InitialSetupFailureStopsTheQueueAndRetryKeepsCompletedDownloads) {
+    (void)test_app();
+    QTemporaryDir temporary;
+    EopCatalog catalog(std::filesystem::path(temporary.path().toStdWString()), {}, {}, false);
+    DownloadServer clock(initial_fixture(ORBITFORGE_TEST_TIME));
+    DownloadServer finals(initial_fixture(
+        std::filesystem::path(ORBITFORGE_TEST_FINALS).parent_path() / "finals2000A.data"));
+    clock.hold = finals.hold = false;
+    finals.fail = true;
+    std::vector<DataProduct> requests;
+    bool retried = false;
+    QElapsedTimer elapsed;
+    elapsed.start();
+    QTimer inspect;
+    QObject::connect(&inspect, &QTimer::timeout, [&] {
+        auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+        if (!dialog)
+            return;
+        if (elapsed.elapsed() > 5000) {
+            ADD_FAILURE() << "Initial setup retry timed out";
+            dialog->reject();
+            return;
+        }
+        auto *retry = dialog->findChild<QPushButton *>("initialDataRetry");
+        if (!retried && retry && retry->isVisible()) {
+            retried = true;
+            EXPECT_TRUE(catalog.has_full_download(DataProduct::utc));
+            EXPECT_FALSE(catalog.has_full_download(DataProduct::finals2000a));
+            EXPECT_EQ(requests.size(), 2U);
+            EXPECT_TRUE(dialog->findChild<QLabel *>("initialDataStatus")->text().contains("503"));
+            capture_initial_setup(dialog, "initial-data-failure");
+            dialog->resize(400, 450);
+            capture_initial_setup(dialog, "initial-data-compact");
+            finals.fail = false;
+            retry->click();
+        }
+    });
+    inspect.start(25);
+    const std::vector required{DataProduct::utc, DataProduct::finals2000a};
+    EXPECT_TRUE(prepare_initial_data(nullptr, catalog, required, [&](auto product) {
+        requests.push_back(product);
+        catalog.start_download(product == DataProduct::utc ? clock.url() : finals.url(), product);
+    }));
+    inspect.stop();
+    EXPECT_TRUE(retried);
+    EXPECT_EQ(requests,
+              (std::vector{DataProduct::utc, DataProduct::finals2000a, DataProduct::finals2000a}));
+}
+TEST(DataCenterDialog,
+     InitialSetupCancelRetainsCompletedFilesAndNextLaunchOnlyDownloadsMissingItems) {
+    (void)test_app();
+    QTemporaryDir temporary;
+    EopCatalog catalog(std::filesystem::path(temporary.path().toStdWString()), {}, {}, false);
+    DownloadServer clock(initial_fixture(ORBITFORGE_TEST_TIME));
+    DownloadServer finals(initial_fixture(
+        std::filesystem::path(ORBITFORGE_TEST_FINALS).parent_path() / "finals2000A.data"));
+    clock.hold = false;
+    std::vector<DataProduct> requests;
+    const auto download = [&](DataProduct product) {
+        requests.push_back(product);
+        catalog.start_download(product == DataProduct::utc ? clock.url() : finals.url(), product);
+    };
+    QElapsedTimer elapsed;
+    elapsed.start();
+    bool cancelled = false;
+    QTimer inspect;
+    QObject::connect(&inspect, &QTimer::timeout, [&] {
+        auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+        if (!dialog)
+            return;
+        if (elapsed.elapsed() > 5000) {
+            ADD_FAILURE() << "Initial setup cancel timed out";
+            dialog->reject();
+        } else if (!cancelled && catalog.has_full_download(DataProduct::utc) && finals.pending) {
+            cancelled = true;
+            capture_initial_setup(dialog, "initial-data-progress");
+            dialog->findChild<QPushButton *>("initialDataCancel")->click();
+        }
+    });
+    inspect.start(25);
+    const std::vector required{DataProduct::utc, DataProduct::finals2000a};
+    EXPECT_FALSE(prepare_initial_data(nullptr, catalog, required, download));
+    inspect.stop();
+    EXPECT_TRUE(cancelled);
+    finish_initial_cancel(catalog);
+    EXPECT_TRUE(catalog.has_full_download(DataProduct::utc));
+    EXPECT_FALSE(catalog.has_full_download(DataProduct::finals2000a));
+    requests.clear();
+    finals.hold = false;
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    QObject::connect(&timeout, &QTimer::timeout, [&] {
+        ADD_FAILURE() << "Initial setup resume timed out";
+        if (auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget()))
+            dialog->reject();
+    });
+    timeout.start(5000);
+    EXPECT_TRUE(prepare_initial_data(nullptr, catalog, required, download));
+    timeout.stop();
+    EXPECT_EQ(requests, std::vector{DataProduct::finals2000a});
+}
+
+TEST(DataCenterDialog, InitialSetupDefaultResourcesRemainReadableAtNarrowWidths) {
+    (void)test_app();
+    QTemporaryDir temporary;
+    EopCatalog catalog(std::filesystem::path(temporary.path().toStdWString()), {}, {}, false);
+    DownloadServer source(initial_fixture(ORBITFORGE_TEST_TIME));
+    QTimer::singleShot(120, [&] {
+        auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+        ASSERT_TRUE(dialog);
+        for (auto product : initial_data_products())
+            EXPECT_TRUE(dialog->findChild<QLabel *>(
+                QStringLiteral("initialDataState%1").arg(static_cast<int>(product))));
+        capture_initial_setup(dialog, "initial-data-all-resources");
+        dialog->resize(400, 450);
+        QEventLoop settled;
+        QTimer::singleShot(60, &settled, &QEventLoop::quit);
+        settled.exec();
+        EXPECT_EQ(dialog->width(), 400);
+        for (auto *scroll : dialog->findChildren<QScrollArea *>())
+            EXPECT_EQ(scroll->horizontalScrollBar()->maximum(), 0);
+        capture_initial_setup(dialog, "initial-data-all-resources-compact");
+        dialog->findChild<QPushButton *>("initialDataCancel")->click();
+    });
+    EXPECT_FALSE(prepare_initial_data(nullptr, catalog, initial_data_products(), [&](auto product) {
+        catalog.start_download(source.url(), product);
+    }));
+    finish_initial_cancel(catalog);
+}
+TEST(DataCenterDialog, LiveInitialDataSetup) {
+    if (qEnvironmentVariableIsEmpty("ORBITFORGE_LIVE_INITIAL_DATA_HOME"))
+        GTEST_SKIP();
+    (void)test_app();
+    EopCatalog catalog(
+        std::filesystem::path(
+            qEnvironmentVariable("ORBITFORGE_LIVE_INITIAL_DATA_HOME").toStdWString()),
+        {}, {}, false);
+    const auto required = initial_data_products();
+    QElapsedTimer elapsed;
+    elapsed.start();
+    QTimer inspect;
+    QObject::connect(&inspect, &QTimer::timeout, [&] {
+        auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+        if (!dialog)
+            return;
+        const auto active = catalog.active_product();
+        if ((!catalog.downloading() &&
+             catalog.update_status(active).state == DataUpdateState::failed) ||
+            elapsed.elapsed() > 900000) {
+            ADD_FAILURE() << catalog.status().toStdString();
+            dialog->reject();
+        }
+    });
+    inspect.start(100);
+    EXPECT_TRUE(prepare_initial_data(nullptr, catalog));
+    inspect.stop();
+    for (auto product : required)
+        EXPECT_TRUE(catalog.has_full_download(product));
+    EXPECT_TRUE(prepare_initial_data(nullptr, catalog));
+}
 } // namespace
+
+TEST(DataCenterDialog, OceanGroupShowsIndependentExtentAndLocalImportAtCompactWidth) {
+    (void)test_app();
+    QTemporaryDir temporary;
+    EopCatalog catalog(std::filesystem::path(temporary.path().toStdWString()), {}, {}, false);
+    QTimer::singleShot(0, [&] {
+        auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+        ASSERT_TRUE(dialog);
+        auto *tree = dialog->findChild<QTreeWidget *>("dataInventory");
+        ASSERT_EQ(tree->topLevelItemCount(), 6);
+        auto *group = tree->topLevelItem(5);
+        ASSERT_EQ(group->childCount(), 2);
+        EXPECT_EQ(tree->currentItem(), group->child(0));
+        EXPECT_EQ(dialog->findChild<QLabel *>("dataName")->text(),
+                  QStringLiteral("FES2014bv1 海潮"));
+        EXPECT_FALSE(catalog.automatic_updates(DataProduct::fes2014bv1));
+        tree->setCurrentItem(group);
+        EXPECT_EQ(dialog->findChild<QLabel *>("dataName")->text(), QStringLiteral("海潮模型"));
+        tree->setCurrentItem(group->child(1));
+        EXPECT_EQ(dialog->findChild<QLabel *>("dataName")->text(), QStringLiteral("外部海潮模型"));
+        EXPECT_FALSE(dialog->findChild<QPushButton *>("downloadEop")->isVisible());
+        dialog->resize(500, 660);
+        tree->itemActivated(group->child(1), 0);
+        QEventLoop settled;
+        QTimer::singleShot(60, &settled, &QEventLoop::quit);
+        settled.exec();
+        for (auto *scroll : dialog->findChildren<QScrollArea *>())
+            if (scroll->isVisible()) {
+                EXPECT_EQ(scroll->horizontalScrollBar()->maximum(), 0);
+            }
+        const auto output = qEnvironmentVariable("ORBITFORGE_DATA_UI_CAPTURE");
+        if (!output.isEmpty()) {
+            EXPECT_TRUE(QDir{}.mkpath(output));
+            EXPECT_TRUE(dialog->grab().save(output + "/ocean-compact.png"));
+        }
+        dialog->reject();
+    });
+    show_data_center(nullptr, catalog, DataProduct::fes2014bv1);
+}
 } // namespace orbitforge::desktop

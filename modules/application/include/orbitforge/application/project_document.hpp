@@ -150,7 +150,8 @@ class ProjectEdit {
     // Metadata bridge while data/report editing migrates to the new facade.
     void earth_orientation(std::optional<core::EopDataInfo> data);
     void analysis_data(std::optional<core::EopDataInfo> eop, std::optional<core::TimeDataInfo> time,
-                       std::optional<AnalysisRecord> record);
+                       std::optional<AnalysisRecord> record,
+                       std::vector<DataReference> forces = {});
     void reports(std::vector<ReportDefinition> reports);
     // Closes the edit on success, validation failure or revision conflict.
     void commit();

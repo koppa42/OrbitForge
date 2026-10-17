@@ -7,6 +7,8 @@
 #include <QTemporaryFile>
 #include <QTimer>
 #include <array>
+#include <atomic>
+#include <future>
 #include <optional>
 #include <orbitforge/runtime/data_catalog.hpp>
 #include <orbitforge/runtime/time_frames.hpp>
@@ -46,8 +48,9 @@ class EopCatalog : public QObject {
     void start_download(QUrl url = {}, DataProduct product = DataProduct::finals2000a);
     void cancel_download();
     void check_updates_if_due(qint64 now, QUrl source = {});
+    void set_update_schedule_enabled(bool enabled);
     [[nodiscard]] bool has_full_download(DataProduct product = DataProduct::finals2000a) const;
-    [[nodiscard]] bool downloading() const { return reply_ != nullptr; }
+    [[nodiscard]] bool downloading() const { return reply_ != nullptr || resource_job_.valid(); }
     [[nodiscard]] DataProduct active_product() const { return active_product_; }
     [[nodiscard]] const QString &status() const { return status_; }
     [[nodiscard]] qint64 received_bytes() const { return received_; }
@@ -56,7 +59,11 @@ class EopCatalog : public QObject {
     void import_raw(const std::filesystem::path &source,
                     DataProduct product = DataProduct::finals2000a);
 
+    void import_ephemeris_snapshot(const std::filesystem::path &source);
+    void import_planetary_centres(const std::filesystem::path &source);
+
   private:
+    enum class EphemerisImport { base, snapshot, planetary_centres };
     std::size_t append(Provider provider);
     void refresh_current(std::optional<std::size_t> acquired = std::nullopt);
     [[nodiscard]] std::optional<std::size_t> current_index(DataProduct product) const;
@@ -67,6 +74,9 @@ class EopCatalog : public QObject {
         return updates_[static_cast<std::size_t>(product)];
     }
     void save_update_status();
+    void start_resource_install(const std::filesystem::path &file, DataProduct product,
+                                const std::string &url, runtime::DataAcquisition acquisition,
+                                EphemerisImport ephemeris_import = EphemerisImport::base);
     std::filesystem::path store_;
     runtime::DataCatalog data_;
     std::vector<Provider> providers_;
@@ -80,7 +90,15 @@ class EopCatalog : public QObject {
     QString status_;
     qint64 received_ = 0;
     qint64 total_ = -1;
-    std::array<DataUpdateStatus, 3> updates_;
+    std::array<DataUpdateStatus, all_data_products.size()> updates_;
+    struct InstalledResource {
+        std::string sha256;
+        runtime::DataAcquisition acquisition;
+    };
+    std::future<InstalledResource> resource_job_;
+    std::shared_ptr<std::atomic_bool> resource_cancel_;
+    QTimer resource_poll_;
+    std::map<std::string, std::string> resource_response_;
     DataProduct active_product_ = DataProduct::finals2000a;
     std::shared_ptr<const core::ITimeProvider> time_;
     std::filesystem::path time_file_;
@@ -89,5 +107,6 @@ class EopCatalog : public QObject {
     QString transfer_error_;
     std::optional<std::size_t> last_installed_;
 };
-void show_data_center(QWidget *parent, EopCatalog &catalog);
+void show_data_center(QWidget *parent, EopCatalog &catalog,
+                      std::optional<DataProduct> initial = {});
 } // namespace orbitforge::desktop

@@ -1,5 +1,6 @@
 // Single-process offline tool. Never linked into the application's CSPICE instance.
 #include <cspice/SpiceUsr.h>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -20,9 +21,10 @@ void check() {
 } // namespace
 int main(int argc, char **argv) {
     try {
-        if (argc != 4) {
-            throw std::runtime_error(
-                "Usage: orbitforge_spice_extract de440s.bsp naif0012.tls NEW-output.bsp");
+        const bool planets = argc == 5 && std::string(argv[4]) == "--all-planets";
+        if (argc != 4 && !planets) {
+            throw std::runtime_error("Usage: orbitforge_spice_extract de440s.bsp naif0012.tls "
+                                     "NEW-output.bsp [--all-planets]");
         }
         if (std::filesystem::exists(argv[3])) {
             throw std::runtime_error("Refusing to replace an existing kernel");
@@ -55,7 +57,7 @@ int main(int argc, char **argv) {
         spkopn_c(argv[3], "OrbitForge derived DE440s validation sample", 4096, &output);
         check();
         // New file and comment area; original attribution is not copied into the modified kernel.
-        const char comments[][128] = {
+        char comments[][128] = {
             "Producer of this derived kernel: OrbitForge project.",
             "Created with CSPICE N0067 spksub; no numerical coefficients were refitted.",
             "Source: JPL DE440s, downloaded from the NAIF generic kernels directory.",
@@ -64,12 +66,22 @@ int main(int argc, char **argv) {
             "Coverage: 2016 DEC 27 to 2017 JAN 05, 00:00:00 TDB, inclusive.",
             "Purpose: small offline OrbitForge P0 validation sample; not a current-epoch "
             "ephemeris."};
+        if (planets)
+            std::snprintf(
+                comments[4], 128, "%s",
+                "Retained targets: 1..10, 199, 299, 301, 399; centres and J2000 unchanged.");
         dafac_c(output, 7, 128, comments);
         check();
         dafbfs_c(input);
         SpiceBoolean found = SPICEFALSE;
         daffna_c(&found);
         std::set<SpiceInt> remaining{3, 10, 301, 399};
+        if (planets) {
+            for (int id = 1; id <= 9; ++id)
+                remaining.insert(id);
+            remaining.insert(199);
+            remaining.insert(299);
+        }
         while (found) {
             SpiceDouble descriptor[5]{}, bounds[2]{};
             SpiceInt integers[6]{};
@@ -95,7 +107,7 @@ int main(int argc, char **argv) {
         dafcls_c(input);
         kclear_c();
         check();
-        std::cout << "Created four-segment OrbitForge DE440s subset: " << argv[3] << '\n';
+        std::cout << "Created OrbitForge DE440s subset: " << argv[3] << '\n';
     } catch (const std::exception &error) {
         std::cerr << error.what() << '\n';
         return 1;

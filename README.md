@@ -11,21 +11,23 @@
 | 能力 | 当前范围 |
 | --- | --- |
 | 场景与对象 | 统一分析时段；多卫星、WGS84 地面站；插入、编辑、重命名、复制和删除 |
-| 轨道计算 | 二体、J2/J4 长期项、SGP4/TLE、HPOP 初版（EGM96 ≤20×20、RKF78/RK4）；GCRF / ITRF / TEME 状态变换 |
+| 轨道计算 | 二体、J2/J4 长期项、SGP4/TLE、HPOP 静态重力（内置 EGM96、文件模型至 2190 阶、RKF78/RKV89/Bulirsch–Stoer/Gauss–Jackson 12/RK4）；GCRF / ITRF / TEME 状态变换 |
 | 机动规划 | [任务序列](docs/architecture/missions.md)：定时滑行、GCRF/VNC/LVLH 脉冲 Δv；二体或 HPOP 滑行、机动前后状态与累计 Δv |
-| 时间与星历 | UTC / TAI / TT / TDB 转换；ERFA、IERS 与 CSPICE 接口；显式本地 SPK 日月星历 |
+| 时间与星历 | UTC / TAI / TT / TDB 转换；ERFA、IERS 与 CSPICE 接口；数据中心下载完整 DE440s 太阳系星历 |
 | 二维与三维 | 地面地图与地球视图共享时间和选择；昼夜显示、局部轨迹缓存、可拖动和弹出的工作区 |
 | 地面站联动 | 最低仰角、可见时段、AER；卫星圆锥子传感器、对地心 / 理想跟踪；时间轴与二维地图关联 |
 | 卫星显示 | 轨迹线型、颜色、粗细及即时预览；按对象保存；可选本地三维模型 |
 | 数据中心 | C04、finals2000A、UTC / 闰秒完整文件下载与自动更新；来源优先级、覆盖检查、有限 EOP 外推 |
 | 报告与曲线 | 九种报告（含 Access / AER）；对象范围、时间采样、多对象曲线、缩放与时刻定位、CSV / PNG 导出、项目内模板 |
 | 报告模板 API | Python/C++ 共用查询与模板模型；字段选择、顺序、逐列单位与标题，复用已有结果更换显示格式 |
-| 项目文件 | `.orbitforge` 版本化容器、完整性校验、原子保存；开发阶段仅读写当前 v14，不兼容旧格式，API 支持数据确认和分析来源记录 |
+| 项目文件 | `.orbitforge` 版本化容器、完整性校验、原子保存；开发阶段仅读写当前 v38，不兼容旧格式，API 支持数据确认和分析来源记录 |
 | 开发接口 | 模块化 C++20 库与 CMake SDK；pybind11 Python 包；桌面与脚本共用 Runtime |
 
 新场景使用当前计算数据；打开或重新计算时，数据发生变化须经用户确认。计算过程保持数据一致，项目记录实际使用的数据哈希供溯源。外部模型和 EOP 文件仍为独立依赖，详见[项目格式](docs/architecture/project_files.md)和[数据中心](docs/architecture/data_center.md)。
 
-尚未实现 OMM / 在线卫星目录、通用事件分析、覆盖分析、HDF5 结果存储或通用分析任务系统。HPOP 当前仅计入地球静态引力，日月引力、阻力、光压与机动仍待扩展；J2/J4 使用长期项平均根数，SGP4 使用固定 TLE（见[预报器说明](docs/architecture/propagators.md)）。时间与参考系尚无日内 EOP 潮汐改正。万星图形场景已有验证入口，尚未完成正式性能验收。
+图形桌面首次启动自动准备 UTC / 闰秒表、完整 C04 与 finals2000A、EGM2008，以及启用 CSPICE 时的 DE440s。准备窗口支持进度、失败重试、导入官方文件和取消退出；已完成的文件保留，后续启动只补齐缺失项。新建 HPOP 默认使用 EGM2008、21×21，文件重力计算支持至 2190 阶，EGM2008 可使用完整 2190×2159；阶数与次数按实际文件范围独立选择。
+
+尚未实现 OMM / 在线卫星目录、通用事件分析、覆盖分析、HDF5 结果存储或通用分析任务系统。HPOP 支持地球静态引力、[永久潮／完整固体潮](docs/architecture/solid_tides.md)、[FES2014bv1 海潮与海洋极潮](docs/architecture/ocean_tides.md)、可选太阳系第三体引力、[球形大气阻力](docs/architecture/atmospheric_drag.md)、[球形太阳辐射压／球面地月阴影](docs/architecture/solar_radiation_pressure.md)及[IERS 2003 三项相对论](docs/architecture/relativity.md)，数据中心可下载 EGM2008 / EGM96 / FES2014bv1 / DE440s / CelesTrak 空间天气或导入相应文件；天气插值更新率、月预报、光压高级设置、重力长期变化、潮汐幅度筛选与次要分潮推算、附加力及协方差按[完整对齐清单](docs/architecture/hpop_alignment.md)继续推进。J2/J4 使用长期项平均根数，SGP4 使用固定 TLE（见[预报器说明](docs/architecture/propagators.md)）。时间与参考系尚无日内 EOP 潮汐改正。万星图形场景已有验证入口，尚未完成正式性能验收。
 
 ## 获取与构建
 

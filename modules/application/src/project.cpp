@@ -25,7 +25,7 @@ namespace {
 static_assert(sizeof(double) == 8 && std::numeric_limits<double>::is_iec559);
 constexpr std::size_t max_file = 64 * 1024 * 1024, max_text = 16384, max_objects = 10000;
 constexpr std::array<std::uint8_t, 8> magic{'O', 'R', 'B', 'F', 'P', 'R', 'J', '\n'};
-constexpr std::uint32_t project_version = 14;
+constexpr std::uint32_t project_version = 40;
 constexpr std::uint32_t scene_tag = 0x454e4353, objects_tag = 0x534a424f, data_tag = 0x41544144,
                         lock_tag = 0x4b434f4c, stations_tag = 0x4e545347, reports_tag = 0x53545052,
                         styles_tag = 0x4c595453, sensors_tag = 0x52534e53, time_tag = 0x454d4954,
@@ -43,7 +43,7 @@ struct SectionSchema {
 // One current schema, shared by the reader and writer. Null means an optional section.
 constexpr std::array section_schemas{
     SectionSchema{scene_tag, 1, "Missing scene section"},
-    SectionSchema{objects_tag, 5, "Missing satellites section"},
+    SectionSchema{objects_tag, 31, "Missing satellites section"},
     SectionSchema{styles_tag, 1, "Missing track styles section"},
     SectionSchema{stations_tag, 2, "Missing ground stations section"},
     SectionSchema{sensors_tag, 1, "Missing sensors section"},
@@ -172,6 +172,97 @@ struct Reader {
     }
     void done() const { check(bytes.empty(), "Unexpected trailing project data"); }
 };
+void write_srp(Writer &out, const core::SrpOptions &o, bool draft = true) {
+    out.number(o.enabled, 1);
+    if (!draft && !o.enabled)
+        return;
+    out.number(static_cast<unsigned>(o.shadow_model), 4);
+    out.number(static_cast<unsigned>(o.sun_position_method), 4);
+    out.number(o.earth_shadow, 1);
+    out.number(o.moon_shadow, 1);
+    out.number(o.boundary_mitigation, 1);
+    for (double value :
+         {o.cr, o.area_mass_ratio_m2_per_kg, o.atmospheric_altitude_m, o.pressure_at_reference_pa,
+          o.reference_distance_m, o.sun_radius_m, o.earth_radius_m, o.moon_radius_m})
+        out.real(value);
+    out.number(o.additional_eclipsing_bodies.size(), 4);
+    for (const auto &body : o.additional_eclipsing_bodies) {
+        out.number(static_cast<unsigned>(body.body), 4);
+        out.real(body.radius_m);
+    }
+}
+core::SrpOptions read_srp(Reader &in) {
+    core::SrpOptions o;
+    o.enabled = in.boolean();
+    const auto shadow = in.number(4);
+    check(shadow <= 2, "Unsupported SRP shadow model");
+    o.shadow_model = static_cast<core::SrpShadowModel>(shadow);
+    const auto sun = in.number(4);
+    check(sun <= 2, "Unsupported SRP Sun position method");
+    o.sun_position_method = static_cast<core::SrpSunPositionMethod>(sun);
+    o.earth_shadow = in.boolean();
+    o.moon_shadow = in.boolean();
+    o.boundary_mitigation = in.boolean();
+    o.cr = in.real();
+    o.area_mass_ratio_m2_per_kg = in.real();
+    o.atmospheric_altitude_m = in.real();
+    o.pressure_at_reference_pa = in.real();
+    o.reference_distance_m = in.real();
+    o.sun_radius_m = in.real();
+    o.earth_radius_m = in.real();
+    o.moon_radius_m = in.real();
+    const auto count = in.number(4);
+    check(count <= core::third_body_count - 2, "Too many additional SRP occultors");
+    for (std::uint64_t i = 0; i < count; ++i) {
+        const auto body = in.number(4);
+        check(body >= 2 && body < core::third_body_count, "Invalid additional SRP occultor");
+        o.additional_eclipsing_bodies.push_back({static_cast<core::ThirdBody>(body), in.real()});
+    }
+    try {
+        core::validate_srp_options(o);
+    } catch (const std::invalid_argument &error) {
+        throw ProjectError(error.what());
+    }
+    return o;
+}
+void write_drag(Writer &out, const core::DragOptions &d, bool draft = true) {
+    out.number(d.enabled, 1);
+    if (!draft && !d.enabled)
+        return;
+    out.real(d.cd);
+    out.real(d.area_mass_ratio_m2_per_kg);
+    out.number(static_cast<unsigned>(d.atmosphere), 4);
+    out.number(static_cast<unsigned>(d.low_altitude_model), 4);
+    for (double value : {d.blending_range_m, d.f107, d.f107_average, d.kp})
+        out.real(value);
+    out.number(d.use_apparent_sun_position, 1);
+    out.text(d.weather_model);
+    out.number(static_cast<unsigned>(d.geomagnetic_update), 4);
+    out.number(static_cast<unsigned>(d.geomagnetic_source), 4);
+    out.number(d.use_approximate_altitude, 1);
+}
+core::DragOptions read_drag(Reader &in) {
+    core::DragOptions d;
+    d.enabled = in.boolean();
+    d.cd = in.real();
+    d.area_mass_ratio_m2_per_kg = in.real();
+    const auto model = in.number(4), lower = in.number(4);
+    check(model <= 1 && lower <= 1, "Unsupported atmospheric density model");
+    d.atmosphere = static_cast<core::AtmosphereModel>(model);
+    d.low_altitude_model = static_cast<core::LowAltitudeDensityModel>(lower);
+    d.blending_range_m = in.real();
+    d.f107 = in.real();
+    d.f107_average = in.real();
+    d.kp = in.real();
+    d.use_apparent_sun_position = in.boolean();
+    d.weather_model = in.text();
+    const auto update = in.number(4), source = in.number(4);
+    check(update <= 3 && source <= 1, "Unsupported weather update/source");
+    d.geomagnetic_update = static_cast<core::GeomagneticUpdate>(update);
+    d.geomagnetic_source = static_cast<core::GeomagneticSource>(source);
+    d.use_approximate_altitude = in.boolean();
+    return d;
+}
 void write_mission(Writer &out, const core::MissionPlan &plan, bool names = true) {
     out.number(static_cast<unsigned>(plan.coast_model), 4);
     out.number(plan.segments.size(), 4);
@@ -239,9 +330,12 @@ Project::Project(std::string project_name, core::Epoch begin, core::Epoch end)
     : name(std::move(project_name)), first(begin), last(end), current(begin) {}
 DataLock Project::data_lock() const {
     try {
-        return earth_orientation ? eop_data_lock(*earth_orientation)
-               : time_data       ? time_data_lock(*time_data)
-                                 : DataLock{};
+        const auto base = earth_orientation ? eop_data_lock(*earth_orientation)
+                          : time_data       ? time_data_lock(*time_data)
+                                            : DataLock{};
+        std::vector<DataReference> refs(base.references().begin(), base.references().end());
+        refs.insert(refs.end(), force_data.begin(), force_data.end());
+        return DataLock{std::move(refs)};
     } catch (const std::invalid_argument &error) {
         throw ProjectError(error.what());
     }
@@ -275,13 +369,66 @@ std::string analysis_input_sha256(const Project &project) {
             write_mission(out, orbit.mission, false);
         if (orbit.uses_hpop()) {
             const auto &o = orbit.hpop;
-            out.text(std::string(core::egm96_model_id()));
+            core::validate_hpop_options(o);
+            out.text(o.gravity_model.empty() ? std::string(core::egm96_model_id())
+                                             : o.gravity_model);
+            out.real(o.gravity_mu);
+            for (const auto &body : o.third_bodies) {
+                out.number(body.enabled, 1);
+                if (!body.enabled)
+                    continue;
+                out.number(static_cast<unsigned>(body.source), 4);
+                if (body.source == core::ThirdBodyGravitySource::user_specified)
+                    out.real(*body.user_mu);
+                else if (body.source == core::ThirdBodyGravitySource::cb_file) {
+                    out.real(body.cb->mu);
+                    out.text(body.cb->content_sha256);
+                }
+            }
+            write_srp(out, core::effective_srp_options(o.srp), false);
+            // Spherical accelerations depend on A/m. Mass changes only compatible areas.
+            // Include mass here when a future mass-dependent model becomes active.
+            write_drag(out, core::effective_drag_options(o.drag), false);
+            if (o.uses_ephemeris())
+                out.text(o.ephemeris_model);
             out.number(static_cast<unsigned>(o.gravity_degree), 4);
             out.number(static_cast<unsigned>(o.gravity_order), 4);
+            out.number(o.uses_secular_gravity(), 1);
+            if (o.uses_earth_fixed_gravity()) {
+                const auto tides =
+                    core::effective_solid_tide_options(o.solid_tides, o.gravity_degree);
+                out.number(static_cast<unsigned>(tides.mode), 4);
+                out.number(tides.truncate_to_gravity, 1);
+                out.number(tides.include_time_dependent_terms, 1);
+            }
+            out.number(o.ocean_tides.active(), 1);
+            if (o.ocean_tides.active()) {
+                out.text(o.ocean_tides.model);
+                out.number(static_cast<unsigned>(o.ocean_tides.degree), 4);
+                out.number(static_cast<unsigned>(o.ocean_tides.order), 4);
+            }
+            out.number(o.include_relativistic_accelerations, 1);
             out.number(static_cast<unsigned>(o.integrator), 4);
+            out.number(o.uses_vop(), 1);
             out.real(o.minimum_altitude_m);
-            if (o.integrator == core::HpopIntegrator::rk4) {
-                out.real(o.fixed_step_seconds);
+            out.number(static_cast<unsigned>(o.interpolation.method), 4);
+            out.number(static_cast<unsigned>(o.interpolation.order), 4);
+            if (o.interpolation.method == core::OrbitInterpolationMethod::vop)
+                out.real(o.interpolation.vop_mu);
+            out.number(o.report_ephemeris_on_fixed_step, 1);
+            if (o.report_ephemeris_on_fixed_step)
+                out.number(static_cast<unsigned>(orbit.step_seconds), 4);
+            if (o.integrator == core::HpopIntegrator::gauss_jackson)
+                out.number(static_cast<unsigned>(o.correction), 4);
+            out.number(o.time_regularization, 1);
+            if (o.time_regularization) {
+                out.real(o.regularization_exponent);
+                out.number(static_cast<unsigned>(o.steps_per_orbit), 4);
+            }
+            out.number(o.uses_fixed_step(), 1);
+            if (o.uses_fixed_step()) {
+                if (!o.time_regularization)
+                    out.real(o.fixed_step_seconds);
             } else {
                 out.real(o.relative_tolerance);
                 out.real(o.position_tolerance_m);
@@ -384,7 +531,7 @@ void validate_project(const Project &project, bool relationships) {
             check(std::isfinite(value), "Nonfinite project position");
         for (const auto value : input.initial.velocity_mps)
             check(std::isfinite(value), "Nonfinite project velocity");
-        check(input.step_seconds >= 1 && input.step_seconds <= 60, "Invalid display step");
+        check(input.step_seconds >= 1 && input.step_seconds <= 60, "Invalid orbit step");
         if (input.propagator == OrbitPropagator::mission) {
             try {
                 const auto end = core::validate_mission(input.initial.epoch, input.mission);
@@ -446,10 +593,10 @@ void validate_project(const Project &project, bool relationships) {
         text_check(sensor.target_station_id);
         check(ids.insert(sensor.object_id).second, "Duplicate project object ID");
         check(!relationships || std::ranges::any_of(project.satellites,
-                                  [&](const auto &satellite) {
-                                      return satellite.orbit.object_id ==
-                                             sensor.parent_satellite_id;
-                                  }),
+                                                    [&](const auto &satellite) {
+                                                        return satellite.orbit.object_id ==
+                                                               sensor.parent_satellite_id;
+                                                    }),
               "Sensor parent satellite does not exist");
         check(std::isfinite(sensor.half_angle_rad) && sensor.half_angle_rad > 0 &&
                   sensor.half_angle_rad <= std::numbers::pi / 2,
@@ -483,6 +630,14 @@ void validate_project(const Project &project, bool relationships) {
             throw ProjectError(error.what());
         }
     }
+    for (const auto &ref : project.force_data) {
+        check(ref.role.starts_with("gravity/") || ref.role.starts_with("ephemeris/") ||
+                  ref.role.starts_with("space-weather/") || ref.role.starts_with("ocean-tides/"),
+              "Unsupported force-data role");
+        text_check(ref.snapshot_id, true);
+        text_check(ref.interpretation_version, true);
+    }
+    (void)project.data_lock();
     if (project.time_data) {
         const auto &data = *project.time_data;
         text_check(data.id, true);
@@ -654,13 +809,52 @@ std::vector<std::uint8_t> encode_project(const Project &project) {
             write_mission(objects, input.mission);
         if (input.uses_hpop()) {
             const auto &o = input.hpop;
+            objects.text(o.gravity_model);
+            objects.real(o.gravity_mu);
+            objects.text(o.ephemeris_model);
+            for (const auto &body : o.third_bodies) {
+                objects.number(body.enabled, 1);
+                objects.number(static_cast<unsigned>(body.source), 4);
+                objects.number(body.user_mu.has_value(), 1);
+                if (body.user_mu)
+                    objects.real(*body.user_mu);
+                objects.number(body.cb.has_value(), 1);
+                if (body.cb) {
+                    objects.real(body.cb->mu);
+                    objects.text(body.cb->name);
+                    objects.text(body.cb->content_sha256);
+                    objects.number(static_cast<unsigned>(body.cb->body), 4);
+                }
+            }
             objects.number(static_cast<unsigned>(o.gravity_degree), 4);
             objects.number(static_cast<unsigned>(o.gravity_order), 4);
+            objects.number(o.include_secular_variations, 1);
+            objects.number(static_cast<unsigned>(o.solid_tides.mode), 4);
+            objects.number(o.solid_tides.truncate_to_gravity, 1);
+            objects.number(o.solid_tides.include_time_dependent_terms, 1);
+            objects.number(o.ocean_tides.enabled, 1);
+            objects.text(o.ocean_tides.model);
+            objects.number(static_cast<unsigned>(o.ocean_tides.degree), 4);
+            objects.number(static_cast<unsigned>(o.ocean_tides.order), 4);
+            objects.number(o.include_relativistic_accelerations, 1);
+            objects.real(o.satellite_mass_kg);
             objects.number(static_cast<unsigned>(o.integrator), 4);
+            objects.number(o.vop, 1);
+            objects.number(static_cast<unsigned>(o.correction), 4);
+            objects.number(static_cast<unsigned>(o.step_control), 4);
             for (double v : {o.relative_tolerance, o.position_tolerance_m, o.velocity_tolerance_mps,
                              o.min_step_seconds, o.max_step_seconds, o.fixed_step_seconds,
                              o.minimum_altitude_m})
                 objects.real(v);
+            objects.number(static_cast<unsigned>(o.interpolation.method), 4);
+            objects.number(static_cast<unsigned>(o.interpolation.order), 4);
+            objects.real(o.interpolation.vop_mu);
+            objects.number(o.report_ephemeris_on_fixed_step, 1);
+            objects.number(o.time_regularization, 1);
+            objects.real(o.regularization_exponent);
+            objects.number(static_cast<unsigned>(o.steps_per_orbit), 4);
+            write_srp(objects, o.srp);
+            write_drag(objects, o.drag);
         }
     }
     payload.section(objects_tag, objects);
@@ -823,11 +1017,47 @@ Project decode_project(std::span<const std::uint8_t> bytes) {
             input.mission = read_mission(objects);
         if (input.uses_hpop()) {
             auto &o = input.hpop;
+            o.gravity_model = objects.text();
+            o.gravity_mu = objects.real();
+            o.ephemeris_model = objects.text();
+            for (auto &body : o.third_bodies) {
+                body.enabled = objects.boolean();
+                const auto source = objects.number(4);
+                check(source <= 2, "Unsupported third-body gravity source");
+                body.source = static_cast<core::ThirdBodyGravitySource>(source);
+                if (objects.boolean())
+                    body.user_mu = objects.real();
+                if (objects.boolean()) {
+                    body.cb = core::CbGravity{objects.real(), objects.text(), objects.text()};
+                    const auto cb_body = objects.number(4);
+                    check(cb_body < core::third_body_count, "Unsupported Cb file body");
+                    body.cb->body = static_cast<core::ThirdBody>(cb_body);
+                }
+            }
             o.gravity_degree = static_cast<int>(objects.number(4));
             o.gravity_order = static_cast<int>(objects.number(4));
+            o.include_secular_variations = objects.boolean();
+            const auto tide_mode = objects.number(4);
+            check(tide_mode <= 2, "Unsupported solid tide mode");
+            o.solid_tides.mode = static_cast<core::SolidTideMode>(tide_mode);
+            o.solid_tides.truncate_to_gravity = objects.boolean();
+            o.solid_tides.include_time_dependent_terms = objects.boolean();
+            o.ocean_tides.enabled = objects.boolean();
+            o.ocean_tides.model = objects.text();
+            o.ocean_tides.degree = static_cast<int>(objects.number(4));
+            o.ocean_tides.order = static_cast<int>(objects.number(4));
+            o.include_relativistic_accelerations = objects.boolean();
+            o.satellite_mass_kg = objects.real();
             const auto integrator = objects.number(4);
-            check(integrator <= 1, "Unsupported HPOP integrator");
+            check(integrator <= 4, "Unsupported HPOP integrator");
             o.integrator = static_cast<core::HpopIntegrator>(integrator);
+            o.vop = objects.boolean();
+            const auto correction = objects.number(4);
+            check(correction <= 1, "Unsupported HPOP predictor corrector scheme");
+            o.correction = static_cast<core::HpopCorrection>(correction);
+            const auto step_control = objects.number(4);
+            check(step_control <= 1, "Unsupported HPOP step size control");
+            o.step_control = static_cast<core::HpopStepControl>(step_control);
             o.relative_tolerance = objects.real();
             o.position_tolerance_m = objects.real();
             o.velocity_tolerance_mps = objects.real();
@@ -835,6 +1065,23 @@ Project decode_project(std::span<const std::uint8_t> bytes) {
             o.max_step_seconds = objects.real();
             o.fixed_step_seconds = objects.real();
             o.minimum_altitude_m = objects.real();
+            const auto interpolation = objects.number(4);
+            check(interpolation <= 2, "Unsupported HPOP interpolation method");
+            o.interpolation.method = static_cast<core::OrbitInterpolationMethod>(interpolation);
+            const auto interpolation_order = objects.number(4);
+            check(interpolation_order <= 29, "Unsupported HPOP interpolation order");
+            o.interpolation.order = static_cast<int>(interpolation_order);
+            o.interpolation.vop_mu = objects.real();
+            o.report_ephemeris_on_fixed_step = objects.boolean();
+            o.time_regularization = objects.boolean();
+            o.regularization_exponent = objects.real();
+            const auto steps_per_orbit = objects.number(4);
+            check(steps_per_orbit >= 1 &&
+                      steps_per_orbit <= static_cast<unsigned>(std::numeric_limits<int>::max()),
+                  "HPOP steps per orbit must be a positive int");
+            o.steps_per_orbit = static_cast<int>(steps_per_orbit);
+            o.srp = read_srp(objects);
+            o.drag = read_drag(objects);
         }
         project.satellites.push_back(std::move(satellite));
     }
@@ -966,6 +1213,10 @@ Project decode_project(std::span<const std::uint8_t> bytes) {
                 {locked.text(), locked.text(), locked.text(), locked.text(), locked.text()});
         try {
             const DataLock lock(std::move(references));
+            for (const auto &ref : lock.references())
+                if (ref.role.starts_with("gravity/") || ref.role.starts_with("ephemeris/") ||
+                    ref.role.starts_with("space-weather/") || ref.role.starts_with("ocean-tides/"))
+                    project.force_data.push_back(ref);
             check(lock.sha256() == locked.text(), "Scenario data lock SHA256 mismatch");
             check(lock == project.data_lock(),
                   "Scenario data references disagree with project metadata");
@@ -974,6 +1225,7 @@ Project decode_project(std::span<const std::uint8_t> bytes) {
         }
         locked.done();
     }
+    validate_project(project);
     return project;
 }
 Project load_project(const std::filesystem::path &path) {

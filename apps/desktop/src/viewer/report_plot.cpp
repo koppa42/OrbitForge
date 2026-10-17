@@ -1,4 +1,5 @@
 #include "report_plot.hpp"
+#include "workbench_theme.hpp"
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
@@ -233,15 +234,15 @@ void ReportPlot::layout_plot() {
     }
 }
 void ReportPlot::draw(QPainter &p, bool interaction) const {
-    p.fillRect(rect(), QColor("#171e27"));
+    p.fillRect(rect(), theme::color(theme::chrome));
     p.setRenderHint(QPainter::Antialiasing);
     p.setFont(font());
-    p.setPen(QColor("#e4edf4"));
+    p.setPen(theme::color(theme::text));
     const auto fm = fontMetrics();
     p.drawText(QRect(16, 10, width() - 32, 28), Qt::AlignLeft | Qt::AlignVCenter,
                fm.elidedText(label_, Qt::ElideRight, width() - 32));
     if (series_.empty()) {
-        p.setPen(QColor("#a0b6c8"));
+        p.setPen(theme::color(theme::text_muted));
         p.drawText(rect(), Qt::AlignCenter, QStringLiteral("此结果没有可绘制的时间序列"));
         return;
     }
@@ -252,7 +253,7 @@ void ReportPlot::draw(QPainter &p, bool interaction) const {
         const auto y = 46 + static_cast<int>(i) / per_row * (fm.height() + 6);
         p.setPen(QPen(series_[i].color, 2));
         p.drawLine(x, y + fm.height() / 2, x + 16, y + fm.height() / 2);
-        p.setPen(QColor("#c1cbe0"));
+        p.setPen(theme::color(theme::text_soft));
         p.drawText(QRect(x + 24, y, 148, fm.height()), Qt::AlignVCenter,
                    i + 1 == legend_count && legend_count < series_.size()
                        ? QStringLiteral("另 %1 个对象…").arg(series_.size() - legend_count + 1)
@@ -261,9 +262,9 @@ void ReportPlot::draw(QPainter &p, bool interaction) const {
     const auto y_ticks = static_cast<int>(std::round((high_ - low_) / y_step_));
     for (int i = 0; i <= y_ticks; ++i) {
         const auto y = plot_.bottom() - plot_.height() * i / y_ticks;
-        p.setPen(QPen(QColor("#303e4e"), 1));
+        p.setPen(QPen(theme::color(theme::line), 1));
         p.drawLine(QPointF(plot_.left(), y), QPointF(plot_.right(), y));
-        p.setPen(QColor("#a0b6c8"));
+        p.setPen(theme::color(theme::text_muted));
         p.drawText(QRectF(2, y - fm.height() / 2.0, plot_.left() - 10, fm.height()),
                    Qt::AlignRight | Qt::AlignVCenter, axis_number(low_ + y_step_ * i, y_step_));
     }
@@ -276,9 +277,9 @@ void ReportPlot::draw(QPainter &p, bool interaction) const {
             break;
         const auto x =
             plot_.left() + plot_.width() * (value * time_scale - left_) / (right_ - left_);
-        p.setPen(QPen(QColor("#293746"), 1));
+        p.setPen(QPen(theme::color(theme::line, 150), 1));
         p.drawLine(QPointF(x, plot_.top()), QPointF(x, plot_.bottom()));
-        p.setPen(QColor("#a0b6c8"));
+        p.setPen(theme::color(theme::text_muted));
         const auto align = x - plot_.left() < 30    ? Qt::AlignLeft
                            : plot_.right() - x < 30 ? Qt::AlignRight
                                                     : Qt::AlignHCenter;
@@ -317,16 +318,16 @@ void ReportPlot::draw(QPainter &p, bool interaction) const {
     if (interaction && hover_) {
         if (const auto *point = nearest(cursor_)) {
             const auto pos = pixel(*point);
-            p.setPen(QPen(QColor("#a3adc4"), 1, Qt::DashLine));
+            p.setPen(QPen(theme::color(theme::text_muted), 1, Qt::DashLine));
             p.drawLine(QPointF(pos.x(), plot_.top()), QPointF(pos.x(), plot_.bottom()));
-            p.setBrush(QColor("#f3f2ff"));
+            p.setBrush(theme::color(theme::text));
             p.drawEllipse(pos, 4, 4);
         }
     }
     if (interaction && dragging_) {
         p.fillRect(QRectF(QPointF(std::min(drag_start_.x(), cursor_.x()), plot_.top()),
                           QPointF(std::max(drag_start_.x(), cursor_.x()), plot_.bottom())),
-                   QColor(150, 145, 238, 50));
+                   theme::color(theme::accent, 50));
     }
     p.restore();
 }

@@ -1,5 +1,6 @@
 from typing import Callable, Sequence, overload
 from os import PathLike
+from pathlib import Path
 
 __version__: str
 MAX_ANALYSIS_SAMPLES: int
@@ -83,6 +84,10 @@ def save_analysis_project(project: ProjectDocument, path: str | PathLike[str],
                            analysis: Analysis, overwrite: bool = False) -> None: ...
 
 class DataSnapshot:
+    def with_ephemeris(self, model: str, manifest: str | PathLike[str], workspace: str | PathLike[str]) -> DataSnapshot: ...
+    def with_gravity(self, model: str, file: str | PathLike[str]) -> DataSnapshot: ...
+    def with_space_weather(self, model: str, file: str | PathLike[str]) -> DataSnapshot: ...
+    def with_ocean_tides(self, model: str, file: str | PathLike[str]) -> DataSnapshot: ...
     def __init__(self) -> None: ...
     @staticmethod
     def builtin_time() -> DataSnapshot: ...
@@ -494,7 +499,13 @@ class EphemerisCoverageError(ValueError): ...
 class EphemerisQueryError(RuntimeError): ...
 
 class EphemerisProvider:
+    def apparent_sun_from_earth(self, epoch: Epoch) -> list[float]: ...
+    def apparent_sun_from_spacecraft(self, epoch: Epoch, position_earth_m: Sequence[float],
+                                    velocity_earth_tai_mps: Sequence[float]) -> list[float]: ...
+    def validate_spacecraft_apparent_sun_interval(self, first: Epoch, last: Epoch) -> None: ...
+    def validate_apparent_sun_interval(self, first: Epoch, last: Epoch) -> None: ...
     def to_tdb(self, epoch: Epoch) -> TdbTime: ...
+    def tdb_seconds_per_tai_second(self, epoch: Epoch) -> float: ...
     def from_tdb(self, time: TdbTime) -> Epoch: ...
     def geometric_state(self, target_naif_id: int, observer_naif_id: int, epoch: Epoch) -> EphemerisState: ...
     def geometric_states(self, target_naif_id: int, observer_naif_id: int, epochs: Sequence[Epoch]) -> list[EphemerisState]: ...
@@ -791,21 +802,297 @@ class ManeuverSeries:
     def data_sha256(self) -> str: ...
     def __len__(self) -> int: ...
 
+class HpopStepControl:
+    RELATIVE_ERROR: HpopStepControl
+    FIXED: HpopStepControl
+
+class HpopCorrection:
+    FULL: HpopCorrection
+    PSEUDO: HpopCorrection
+
 class HpopIntegrator:
+    GAUSS_JACKSON: HpopIntegrator
+    BULIRSCH_STOER: HpopIntegrator
+    RKV89: HpopIntegrator
     RKF78: HpopIntegrator
     RK4: HpopIntegrator
 
+class ThirdBody:
+    SUN: ThirdBody
+    MOON: ThirdBody
+    JUPITER: ThirdBody
+    VENUS: ThirdBody
+    SATURN: ThirdBody
+    MARS: ThirdBody
+    MERCURY: ThirdBody
+    URANUS: ThirdBody
+    NEPTUNE: ThirdBody
+    PLUTO: ThirdBody
+
+class ThirdBodyGravitySource:
+    CB_FILE: ThirdBodyGravitySource
+    JPL_DE: ThirdBodyGravitySource
+    USER_SPECIFIED: ThirdBodyGravitySource
+
+class CbGravity:
+    @property
+    def mu(self) -> float: ...
+    @property
+    def name(self) -> str: ...
+    @property
+    def content_sha256(self) -> str: ...
+
+    @property
+    def body(self) -> ThirdBody: ...
+
+class ThirdBodyGravity:
+    def __init__(self) -> None: ...
+    enabled: bool
+    source: ThirdBodyGravitySource
+    user_mu: float | None
+    cb: CbGravity | None
+
+def load_cb_gravity(path: str | Path, body: ThirdBody, mu_scale: float = 1.0) -> CbGravity: ...
+
+class AtmosphereModel:
+    JACCHIA_ROBERTS: AtmosphereModel
+    NRLMSISE00: AtmosphereModel
+
+class GeomagneticUpdate:
+    DAILY: GeomagneticUpdate
+    THREE_HOURLY: GeomagneticUpdate
+    THREE_HOURLY_INTERPOLATED: GeomagneticUpdate
+    THREE_HOURLY_CUBIC_SPLINE: GeomagneticUpdate
+
+class GeomagneticSource:
+    AP: GeomagneticSource
+    KP: GeomagneticSource
+
+class SpaceWeatherSample:
+    @property
+    def f107(self) -> float: ...
+    @property
+    def f107_average(self) -> float: ...
+    @property
+    def kp(self) -> float: ...
+    @property
+    def ap(self) -> float: ...
+    @property
+    def ap_history(self) -> list[float] | None: ...
+
+class SpaceWeatherInfo:
+    @property
+    def solar_flux_adjusted(self) -> bool: ...
+    @property
+    def cssi_predictions(self) -> bool: ...
+    @property
+    def sha256(self) -> str: ...
+    @property
+    def source_url(self) -> str: ...
+    @property
+    def format(self) -> str: ...
+    @property
+    def first(self) -> UtcDateTime: ...
+    @property
+    def last(self) -> UtcDateTime: ...
+
+class SpaceWeatherCoverageError(IndexError): ...
+
+class SpaceWeather:
+    @property
+    def info(self) -> SpaceWeatherInfo: ...
+    def sample(self, at: Epoch, time: TimeProvider, model: AtmosphereModel,
+               update: GeomagneticUpdate, source: GeomagneticSource,
+               sun_distance_m: Callable[[Epoch], float] | None = None) -> SpaceWeatherSample: ...
+    def validate_interval(self, first: Epoch, last: Epoch, time: TimeProvider,
+                          model: AtmosphereModel, update: GeomagneticUpdate,
+                          source: GeomagneticSource,
+                          sun_distance_m: Callable[[Epoch], float] | None = None) -> None: ...
+
+def load_space_weather(file: str | PathLike[str]) -> SpaceWeather: ...
+
+class LowAltitudeDensityModel:
+    NONE: LowAltitudeDensityModel
+    NRLMSISE00: LowAltitudeDensityModel
+
+class DragOptions:
+    def __init__(self) -> None: ...
+    enabled: bool
+    cd: float
+    area_mass_ratio_m2_per_kg: float
+    atmosphere: AtmosphereModel
+    low_altitude_model: LowAltitudeDensityModel
+    blending_range_m: float
+    f107: float
+    f107_average: float
+    kp: float
+    use_apparent_sun_position: bool
+    use_approximate_altitude: bool
+    weather_model: str
+    geomagnetic_update: GeomagneticUpdate
+    geomagnetic_source: GeomagneticSource
+    def validate(self) -> None: ...
+
+class AtmosphereInput:
+    def __init__(self) -> None: ...
+    utc: UtcDateTime
+    geodetic: Sequence[float]  # longitude_rad, latitude_rad, height_m
+    solar_hour_angle_rad: float
+    sun_declination_rad: float
+    f107: float
+    f107_average: float
+    kp: float
+    daily_ap: float | None  # NRLMSISE only; mutually exclusive with ap_history
+    ap_history: Sequence[float] | None  # Seven native Ap values; see atmospheric_drag.md
+
+class AtmosphereEvaluation:
+    @property
+    def density_kg_m3(self) -> float: ...
+    @property
+    def temperature_k(self) -> float: ...
+    @property
+    def exospheric_temperature_k(self) -> float: ...
+
+class DragEvaluation:
+    @property
+    def density_altitude_m(self) -> float: ...
+    @property
+    def acceleration_itrf_mps2(self) -> list[float]: ...
+    @property
+    def density_kg_m3(self) -> float: ...
+    @property
+    def geodetic(self) -> list[float]: ...
+
+def kp_to_ap(kp: float) -> float: ...
+def ap_to_kp(ap: float) -> float: ...
+def evaluate_atmosphere(model: AtmosphereModel, input: AtmosphereInput) -> AtmosphereEvaluation: ...
+def evaluate_drag(position_itrf_m: Sequence[float], velocity_itrf_mps: Sequence[float],
+                  sun_itrf_m: Sequence[float], utc: UtcDateTime, options: DragOptions,
+                  weather: SpaceWeatherSample | None = None,
+                  low_weather: SpaceWeatherSample | None = None) -> DragEvaluation: ...
+
+class SrpSunPositionMethod:
+    TRUE: SrpSunPositionMethod
+    APPARENT_TO_TRUE_CB: SrpSunPositionMethod
+    APPARENT: SrpSunPositionMethod
+
+class SrpShadowModel:
+    NONE: SrpShadowModel
+    CYLINDRICAL: SrpShadowModel
+    DUAL_CONE: SrpShadowModel
+
+class SrpEclipsingBody:
+    def __init__(self) -> None: ...
+    body: ThirdBody
+    radius_m: float
+
+class SrpBodyPosition:
+    def __init__(self) -> None: ...
+    body: ThirdBody
+    position_m: Sequence[float]
+
+def default_srp_eclipsing_body(body: ThirdBody) -> SrpEclipsingBody: ...
+
+class SrpOptions:
+    def __init__(self) -> None: ...
+    enabled: bool
+    cr: float
+    area_mass_ratio_m2_per_kg: float
+    shadow_model: SrpShadowModel
+    sun_position_method: SrpSunPositionMethod
+    earth_shadow: bool
+    moon_shadow: bool
+    boundary_mitigation: bool
+    additional_eclipsing_bodies: Sequence[SrpEclipsingBody]
+    atmospheric_altitude_m: float
+    pressure_at_reference_pa: float
+    reference_distance_m: float
+    sun_radius_m: float
+    earth_radius_m: float
+    moon_radius_m: float
+    def validate(self) -> None: ...
+
+class SrpEvaluation:
+    @property
+    def acceleration_mps2(self) -> list[float]: ...
+    @property
+    def lighting_ratio(self) -> float: ...
+
+def evaluate_srp(satellite_m: Sequence[float], sun_m: Sequence[float], options: SrpOptions,
+                 moon_m: Sequence[float] | None = None,
+                 additional_positions: Sequence[SrpBodyPosition] = ()) -> SrpEvaluation: ...
+
+class RelativityEvaluation:
+    @property
+    def schwarzschild_mps2(self) -> list[float]: ...
+    @property
+    def lense_thirring_mps2(self) -> list[float]: ...
+    @property
+    def de_sitter_mps2(self) -> list[float]: ...
+    @property
+    def acceleration_mps2(self) -> list[float]: ...
+
+def evaluate_relativity(position_m: Sequence[float], velocity_mps: Sequence[float],
+                        earth_mu: float, sun_position_m: Sequence[float],
+                        sun_velocity_mps: Sequence[float], sun_mu: float,
+                        earth_pole: Sequence[float]) -> RelativityEvaluation: ...
+
+class SolidTideMode:
+    NONE: SolidTideMode
+    PERMANENT: SolidTideMode
+    FULL: SolidTideMode
+
+class SolidTideOptions:
+    mode: SolidTideMode
+    truncate_to_gravity: bool
+    include_time_dependent_terms: bool
+    def __init__(self) -> None: ...
+    def validate(self) -> None: ...
+
+class OceanTideOptions:
+    enabled: bool
+    model: str
+    degree: int
+    order: int
+    def __init__(self) -> None: ...
+    def validate(self) -> None: ...
+
 class HpopOptions:
+    gravity_model: str
+    gravity_mu: float
+    third_bodies: list[ThirdBodyGravity]
+    srp: SrpOptions
+    drag: DragOptions
+    ephemeris_model: str
     def __init__(self) -> None: ...
     gravity_degree: int
     gravity_order: int
+    solid_tides: SolidTideOptions
+    ocean_tides: OceanTideOptions
+    satellite_mass_kg: float
+    @property
+    def drag_area_m2(self) -> float: ...
+    @property
+    def srp_area_m2(self) -> float: ...
+    include_relativistic_accelerations: bool
+    include_secular_variations: bool
     integrator: HpopIntegrator
+    vop: bool
+    def uses_vop(self) -> bool: ...
+    correction: HpopCorrection
+    step_control: HpopStepControl
+    def uses_fixed_step(self) -> bool: ...
     relative_tolerance: float
     position_tolerance_m: float
     velocity_tolerance_mps: float
     min_step_seconds: float
     max_step_seconds: float
     fixed_step_seconds: float
+    time_regularization: bool
+    regularization_exponent: float
+    steps_per_orbit: int
+    interpolation: OrbitInterpolationOptions
+    report_ephemeris_on_fixed_step: bool
     minimum_altitude_m: float
     def validate(self) -> None: ...
 
@@ -868,6 +1155,7 @@ class ProjectGroundStation:
 
 class Project:
     time_data: TimeDataInfo | None
+    force_data: list[DataReference]
     analysis_record: AnalysisRecord | None
     @property
     def analysis_status(self) -> AnalysisStatus: ...
@@ -946,11 +1234,148 @@ class CatalogSnapshot:
     @property
     def acquired_at_unix_seconds(self) -> int | None: ...
 
+class ThirdBodyDataInfo:
+    @property
+    def model(self) -> str: ...
+    @property
+    def content_sha256(self) -> str: ...
+    @property
+    def interpretation_version(self) -> str: ...
+    @property
+    def first(self) -> Epoch: ...
+    @property
+    def last(self) -> Epoch: ...
+    @property
+    def sun_mu(self) -> float: ...
+    @property
+    def moon_mu(self) -> float: ...
+
+    def mu(self, body: ThirdBody) -> float: ...
+
+class CatalogEphemeris:
+    @property
+    def selection(self) -> str: ...
+    @property
+    def info(self) -> ThirdBodyDataInfo: ...
+    @property
+    def manifest(self) -> Path: ...
+    @property
+    def acquisition(self) -> DataAcquisition: ...
+    @property
+    def acquired_at_unix_seconds(self) -> int: ...
+
+class GravityCoefficient:
+    degree: int
+    order: int
+    c: float
+    s: float
+
+class GravitySecularVariations:
+    reference_epoch: Epoch
+    rates_per_year: list[GravityCoefficient]
+
+class GravityInfo:
+    secular_variations: GravitySecularVariations | None
+    @property
+    def model(self) -> str: ...
+    @property
+    def sha256(self) -> str: ...
+    @property
+    def source_url(self) -> str: ...
+    @property
+    def tide_system(self) -> str: ...
+    @property
+    def solid_tide_k20(self) -> float: ...
+    @property
+    def mu(self) -> float: ...
+    @property
+    def radius_m(self) -> float: ...
+    @property
+    def degree(self) -> int: ...
+    @property
+    def order(self) -> int: ...
+
+class CatalogGravity:
+    @property
+    def selection(self) -> str: ...
+    @property
+    def info(self) -> GravityInfo: ...
+    @property
+    def file(self) -> Path: ...
+    @property
+    def acquisition(self) -> DataAcquisition: ...
+    @property
+    def acquired_at_unix_seconds(self) -> int: ...
+
+class CatalogSpaceWeather:
+    @property
+    def selection(self) -> str: ...
+    @property
+    def info(self) -> SpaceWeatherInfo: ...
+    @property
+    def file(self) -> Path: ...
+    @property
+    def acquisition(self) -> DataAcquisition: ...
+    @property
+    def acquired_at_unix_seconds(self) -> int: ...
+
+class OceanTideInfo:
+    @property
+    def model(self) -> str: ...
+    @property
+    def sha256(self) -> str: ...
+    @property
+    def source_url(self) -> str: ...
+    @property
+    def degree(self) -> int: ...
+    @property
+    def order(self) -> int: ...
+    @property
+    def constituents(self) -> int: ...
+    @property
+    def mu(self) -> float: ...
+    @property
+    def radius_m(self) -> float: ...
+
+class CatalogOceanTides:
+    @property
+    def selection(self) -> str: ...
+    @property
+    def info(self) -> OceanTideInfo: ...
+    @property
+    def file(self) -> Path: ...
+    @property
+    def acquisition(self) -> DataAcquisition: ...
+    @property
+    def acquired_at_unix_seconds(self) -> int: ...
+
+class OceanTideModel:
+    @property
+    def info(self) -> OceanTideInfo: ...
+
+def load_ocean_tides(file: str | PathLike[str]) -> OceanTideModel: ...
+
 class EopProduct:
     C04: EopProduct
     FINALS2000A: EopProduct
 
 class DataCatalog:
+    @property
+    def ocean_tide_models(self) -> list[CatalogOceanTides]: ...
+    def install_ocean_tides(self, file: str | PathLike[str], model: str = "fes2014bv1",
+                            source_url: str = "") -> CatalogOceanTides: ...
+    @property
+    def weather_sources(self) -> list[CatalogSpaceWeather]: ...
+    def install_space_weather(self, file: str | PathLike[str], model: str = "celestrak",
+                              source_url: str = "") -> CatalogSpaceWeather: ...
+    @property
+    def gravity_models(self) -> list[CatalogGravity]: ...
+    @property
+    def ephemerides(self) -> list[CatalogEphemeris]: ...
+    def install_de440s(self, file: str | PathLike[str]) -> CatalogEphemeris: ...
+    def install_ephemeris_snapshot(self, manifest: str | PathLike[str]) -> CatalogEphemeris: ...
+    def install_planetary_centres(self, file: str | PathLike[str], source_url: str = "") -> CatalogEphemeris: ...
+    def install_gravity(self, file: str | PathLike[str], model: str = "custom", source_url: str = "") -> CatalogGravity: ...
     def __init__(self, root: str | PathLike[str]) -> None: ...
     def snapshot(self, first: Epoch, last: Epoch, *, earth_orientation: bool = True) -> DataSnapshot: ...
     @property
@@ -1143,3 +1568,34 @@ def report_input_sha256(project: Project) -> str: ...
 def generate_report(project: Project, definition: ReportDefinition,
                     eop_manifest: str | PathLike[str] | None = None,
                     time_file: str | PathLike[str] | None = None) -> ReportResult: ...
+
+class OrbitInterpolationMethod:
+    LAGRANGE: OrbitInterpolationMethod
+    HERMITE: OrbitInterpolationMethod
+    VOP: OrbitInterpolationMethod
+    @property
+    def name(self) -> str: ...
+
+class OrbitInterpolationOptions:
+    def __init__(self) -> None: ...
+    method: OrbitInterpolationMethod
+    order: int
+    vop_mu: float
+
+def make_tabulated_orbit_session(
+    arcs: Sequence[Sequence[CartesianState]],
+    options: OrbitInterpolationOptions = ...,
+    object_id: str = "satellite-1",
+    input_revision: int = 1,
+) -> Session: ...
+
+def propagate_hpop_ephemeris(
+    input: OrbitInput, end: Epoch, *, reporting_step_nanoseconds: int = 0,
+    data: DataSnapshot = ..., cancelled: Callable[[], bool] | None = None,
+) -> list[list[CartesianState]]: ...
+
+def make_hpop_ephemeris_session(
+    input: OrbitInput, end: Epoch, interpolation: OrbitInterpolationOptions, *,
+    reporting_step_nanoseconds: int = 0, data: DataSnapshot = ...,
+    input_revision: int = 1, cancelled: Callable[[], bool] | None = None,
+) -> Session: ...

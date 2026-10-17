@@ -10,7 +10,7 @@
 | 对象 API | [Python 对象句柄、公共 C++ 事务与迁移](architecture/object_editing.md) |
 | C++ 项目 API | [聚合头文件、对象所有权、数据确认与安装后链接](architecture/cpp_api.md) |
 | 分析 API | [固定输入、数据确认、状态查询与导出](architecture/analysis_api.md) |
-| 轨道模型 | [J2 长期项与状态语义](architecture/j2.md)、[二体验证方法](validation/p1_two_body_protocol.md) |
+| 轨道模型 | [预报器](architecture/propagators.md)、[J2](architecture/j2.md)、[固体潮](architecture/solid_tides.md)、[海潮](architecture/ocean_tides.md)、[二体验证方法](validation/p1_two_body_protocol.md) |
 | 机动规划 | [任务序列与脉冲机动](architecture/missions.md)、[验证协议](validation/mission_protocol.md) |
 | 地面站 | [WGS84 地面站与对象生命周期](architecture/ground_stations.md) |
 | 可见性与传感器 | [Access、AER、子传感器、STK 对照与验证](architecture/access_sensors.md) |
@@ -25,6 +25,7 @@
 ## 重构路线
 
 - [统一对象 API 与数据驱动设计](architecture/object_api_design.md)：Python / C++ 接口、对象事务、分析快照、界面联动与迁移路线；对象编辑阶段已实现，计算与桌面适配按阶段推进。
+- [HPOP 与 STK 的对照及重构要求](architecture/hpop_alignment.md)：完整力模型、数据依赖、积分、协方差、桌面分组与分阶段数值验收；目标能力与 0.2.1 现状分开说明。
 
 ## 开发与验证
 

@@ -1,5 +1,6 @@
 #pragma once
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <orbitforge/core/ephemeris/ephemeris_provider.hpp>
 #include <orbitforge/core/propagation/central_body.hpp>
@@ -14,6 +15,16 @@ namespace orbitforge::providers::spice {
 // All CSPICE access to this linked instance must use this wrapper.
 [[nodiscard]] std::unique_ptr<core::IEphemerisProvider>
 load_snapshot(const std::filesystem::path &manifest, const std::filesystem::path &workspace);
+
+// Copy only physical planet-centre segments 499..999 relative to their own
+// system barycentre, in J2000. No numerical refit. Returns the retained IDs;
+// files are named centre-<ID>.bsp in output_directory and must not already exist.
+// Source must remain immutable during the call. On failure only files created
+// by this call are removed. The cancellation callback must not re-enter SPICE.
+[[nodiscard]] std::vector<std::int32_t>
+extract_planetary_centres(const std::filesystem::path &source,
+                          const std::filesystem::path &output_directory,
+                          const std::function<void()> &checkpoint = {});
 
 // Kernel-free ideal two-body dynamics. SI values and elapsed TAI seconds;
 // shares the same CSPICE global-state lock as ephemeris queries.

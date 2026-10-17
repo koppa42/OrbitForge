@@ -14,3 +14,16 @@
 /modules/providers/sgp4/third_party/SGP4.h -text whitespace=-blank-at-eol,-blank-at-eof
 /tests/reference/propagators/*.txt text eol=lf
 /tests/integration/fixtures/*.orbitforge -text
+
+/tests/reference/propagators/*.pot -text
+
+/tests/reference/propagators/*.grv -text
+
+/tests/reference/propagators/*.fxm -text
+
+/tests/reference/propagators/weather_cssi.dat -text
+/tests/reference/propagators/weather_monthly.csv text eol=lf
+
+/modules/core/src/propagation/integrators/rklib-LICENSE.txt -text
+
+/data/samples/spice/mar099s_2016_leap/*.txt text eol=lf

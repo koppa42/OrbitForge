@@ -21,7 +21,13 @@ LSK 只用于上述均匀时间转换所需常数。UTC↔TAI 继续使用独立
 | `velocity_mps` / `velocity_time_scale` | 相对速度，米/秒；导数时间尺度明确为 `TDB` |
 | `source_id` | 清单 SHA256、工具包、轴标签、像差选项和速度时间尺度 |
 
-DE440 数据使用 ICRF 对齐的轴。此接口保留 SPICE 标签，尚未实现 BCRS/GCRS 的完整相对论转换或 TDB→TAI 速度导数转换，不能将结果直接改标签作为 GCRF `CartesianState` 输入地球旋转接口。尚未提供光行时/光行差修正、任意 FK/PCK 参考系或地面站观测量。
+DE440 数据使用 ICRF 对齐的轴。此接口保留 SPICE 标签，尚未实现 BCRS/GCRS 的完整相对论转换，不能将结果直接改标签作为 GCRF `CartesianState` 输入地球旋转接口。原始速度保持每 TDB 秒；`tdb_seconds_per_tai_second(epoch)` 依据快照自身 LSK 给出解析 dTDB/dTAI，HPOP 的几何状态适配器显式转换速度导数用于[相对论力](relativity.md)，这不构成坐标系转换。几何状态接口不应用光行时/光行差；另有下述受限太阳接口。尚未提供任意 FK/PCK 参考系或地面站观测量。
+
+## 接收型太阳向量
+
+`apparent_sun_from_earth(epoch)` 返回地心 LT+S 太阳向量。`apparent_sun_from_spacecraft(epoch, position_earth_m, velocity_earth_tai_mps)` 返回从移动卫星指向太阳的接收型 LT+S 向量，单位米，ICRF 对齐轴。后者明确接受地心位置和 **每 TAI 秒** 的相对速度，通过 LSK 时间模型导数换算速率，再与 Earth/SSB 的 TDB 状态组合；只用于牛顿力环境，不将 `EphemerisState` 重命名为 GCRF 状态。位置/速度必须有限，SSB 观测者速度须小于光速。
+
+地心方法继续使用 600 秒历史余量。卫星方法用实际几何距离的一次光行时估计，查询发光时刻前检查快照策略边界，再应用恒星光行差；不假定卫星始终靠近地球。`validate_spacecraft_apparent_sun_interval(first,last)` 检查接收区间的 Earth→EMB→SSB 链及快照起点到 last 的 Sun→SSB 连续历史；发光时刻是否仍在该范围内还须在每次求值时确认。详见[太阳辐射压](solar_radiation_pressure.md)。
 
 ## 快照清单与覆盖
 
@@ -34,7 +40,7 @@ DE440 数据使用 ICRF 对齐的轴。此接口保留 SPICE 标签，尚未实�
 | `first_tai_ns` / `last_tai_ns` | int64 TAI 纳秒，首项小于末项；两端均包含 |
 | `kernels` | 有序数组，最多 16 项，恰好一个 LSK、至少一个 SPK |
 
-每个内核严格包含 `file`、`kind`、`sha256`、`source_url`、`source_sha256`、`producer`。`file` 必须为同目录文件名，解析后的路径仍须位于该目录；重复路径拒绝。类型限于 LSK/SPK，并核对文件实际结构。两个 SHA256 均为 64 位小写十六进制；`sha256` 检验交付文件，`source_sha256` 记录原始来源。来源字段和散列不构成身份认证。
+每个内核严格包含 `file`、`kind`、`sha256`、`source_url`、`source_sha256`、`producer`。`file` 必须为同目录文件名，解析后的路径仍须位于该目录；重复路径拒绝。类型为 `LSK`、`SPK` 或 `SPK_BODY_CENTRES`，并核对文件实际结构。最后一种角色仍是二进制 SPK，但逐段验证仅包含一个物理行星中心（499、599、699、799、899、999），观测中心为自身系统质心（4–9），参考轴为 J2000。文件名须为 `centre-<NAIF ID>.bsp`，拒绝夹带太阳、地球或其他目标的片段。两个 SHA256 均为 64 位小写十六进制；`sha256` 检验交付文件，`source_sha256` 记录原始来源。来源字段和散列不构成身份认证。
 
 内核总字节数最多 64 MiB。读取到内存后先校验散列，再用同一字节缓冲区创建运行副本。加载顺序按清单保留，重叠 SPK 的优先级因此属于快照契约。清单原始字节另计算 SHA256；`data_info` 保留完整顺序和来源。
 
@@ -66,3 +72,11 @@ Python 计算和加载释放 GIL，再由此锁串行管理 CSPICE。这允许�
 - [SPICE 参考系约定](https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/C/req/frames.html)。
 - [ldpool：仅加载文本内核变量](https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/C/cspice/ldpool_c.html)。
 - [NAIF 数据和派生内核规则](https://naif.jpl.nasa.gov/naif/rules.html)。
+
+## 行星本体补充星历
+
+`DataCatalog::install_planetary_centres(source, source_url)` 导入最多 2 GiB 的本地二进制 SPK，必须已有 DE440s。输入先流式复制并散列，在 CSPICE 全局锁内用 `spksub` 原样提取上述本体相对系统质心的片段，保留原片段标识与系数，不重拟合。仅替换本次导入的行星；其他补充文件保留。导出清单记录原文件来源与 SHA-256、派生文件 SHA-256 和生成者。最终快照仍受 64 MiB 总上限约束。
+
+`install_ephemeris_snapshot(manifest)` 导入完整的显式数据包，须同时通过 Provider 和 HPOP 的 DE440s 主星历约束、全部引力目标链连续覆盖认证。补充文件自身覆盖可小于主清单窗口，HPOP 按所选遮挡体及实际传播区间检查整条链与内部缺口。普通 DE440s 保持 v3 解释身份；存在补充文件时采用 `body-centres=filtered-spk-v1` 的 v4 身份。
+
+两类导入均先准备独立副本，再验证、原子发布。取消、损坏或准备期间目录收据被另一写入者更新时保留当前有效数据；后一种情况明确要求基于最新快照重试。已有分析继续持有原快照。更新完整 DE440s 时保留本体补充文件。原始 `SPK` 角色仍仅接收 DE440s 来源；不能仅靠改写角色使任意主星历绕过限制。来源哈希只追踪内容，不是来源真实性认证。

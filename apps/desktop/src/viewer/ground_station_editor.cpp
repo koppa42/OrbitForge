@@ -1,4 +1,5 @@
 #include "ground_station_editor.hpp"
+#include "form_kit.hpp"
 #include "quantity_editor.hpp"
 #include "responsive_layout.hpp"
 #include "workbench_style.hpp"
@@ -26,8 +27,8 @@ GroundStationEditor::GroundStationEditor(QWidget *parent) : QDialog(parent) {
     fields_->setMaximumWidth(680);
     scroll->setAlignment(Qt::AlignLeft | Qt::AlignTop);
     auto *body = new QVBoxLayout(fields_);
-    body->setContentsMargins(24, 22, 24, 20);
-    body->setSpacing(18);
+    body->setContentsMargins(theme::space::page);
+    body->setSpacing(theme::space::sm);
     auto *title = new QLabel(QStringLiteral("地面站"));
     title->setObjectName("panelTitle");
     body->addWidget(title);
@@ -35,16 +36,25 @@ GroundStationEditor::GroundStationEditor(QWidget *parent) : QDialog(parent) {
     description->setObjectName("dialogDescription");
     description->setWordWrap(true);
     body->addWidget(description);
-    auto *card = new QFrame;
-    card->setObjectName("formSection");
-    auto *form = new QFormLayout(card);
-    form->setContentsMargins(16, 16, 16, 16);
-    form->setVerticalSpacing(14);
-    form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    // Inspector groups: identity, position (with the derived ITRF position) and access
+    // constraints. Datum and convention notes sit behind each group's info marker.
+    auto *groups = new QVBoxLayout;
+    groups->setContentsMargins(0, theme::space::sm, 0, 0);
+    groups->setSpacing(0);
+    body->addLayout(groups);
+    std::vector<FormGroup *> frames;
+    const auto group = [&](const QString &heading) {
+        frames.push_back(new FormGroup(heading));
+        groups->addWidget(frames.back());
+        return frames.back()->form();
+    };
+    auto *identity = group(QStringLiteral("站点"));
     name_ = new QLineEdit;
     name_->setObjectName("stationName");
     name_->setMaxLength(16384);
-    form->addRow(QStringLiteral("名称"), name_);
+    name_->setMaximumWidth(276);
+    identity->addRow(QStringLiteral("名称"), name_);
+    auto *form = group(QStringLiteral("位置 · WGS84"));
     longitude_ = new QuantityEditor(Unit::degree);
     latitude_ = new QuantityEditor(Unit::degree);
     height_ = new QuantityEditor(Unit::metre);
@@ -61,41 +71,31 @@ GroundStationEditor::GroundStationEditor(QWidget *parent) : QDialog(parent) {
     form->addRow(QStringLiteral("经度"), longitude_);
     form->addRow(QStringLiteral("纬度"), latitude_);
     form->addRow(QStringLiteral("椭球高"), height_);
-    body->addWidget(card);
-    auto *hint = new QLabel(
-        QStringLiteral("WGS84 · 大地纬度\n东经、北纬为正，西经、南纬为负。\n"
-                       "椭球高以 WGS84 椭球面为零，与海拔不同。支持 −12,000 至 100,000 m。"));
-    hint->setObjectName("hint");
-    hint->setWordWrap(true);
-    body->addWidget(hint);
-    auto *constraints = new QFrame;
-    constraints->setObjectName("formSection");
-    auto *constraint_form = new QFormLayout(constraints);
-    constraint_form->setContentsMargins(16, 16, 16, 16);
+    frames[1]->add_help(QStringLiteral("大地纬度；东经、北纬为正，西经、南纬为负。"));
+    frames[1]->add_help(
+        QStringLiteral("椭球高以 WGS84 椭球面为零，与海拔不同。支持 −12,000 至 100,000 m。"));
+    preview_ = new QLabel;
+    preview_->setObjectName("stationPositionPreview");
+    preview_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    preview_->setWordWrap(true);
+    form->addRow(QStringLiteral("ITRF / m"), preview_);
+    auto *constraint_form = group(QStringLiteral("可见性约束"));
     minimum_elevation_ = new QuantityEditor(Unit::degree);
     minimum_elevation_->setObjectName("stationMinimumElevation");
     minimum_elevation_->set_label(QStringLiteral("最低仰角"));
     minimum_elevation_->set_range(0, 90, Unit::degree);
     constraint_form->addRow(QStringLiteral("最低仰角"), minimum_elevation_);
-    auto *constraint_hint =
-        new QLabel(QStringLiteral("可见性分析同时检查地球遮挡与最低仰角。0° 为当地水平线。"));
-    constraint_hint->setWordWrap(true);
-    constraint_hint->setObjectName("hint");
-    constraint_form->addRow(constraint_hint);
-    body->addWidget(constraints);
+    frames[2]->add_help(QStringLiteral("可见性分析同时检查地球遮挡与最低仰角。0° 为当地水平线。"));
+    responsive_form(identity);
     responsive_form(form);
     responsive_form(constraint_form);
-    preview_ = new QLabel;
-    preview_->setObjectName("stationPositionPreview");
-    preview_->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    preview_->setWordWrap(true);
-    body->addWidget(preview_);
+    align_form_labels(fields_);
     body->addStretch();
     scroll->setWidget(fields_);
     layout->addWidget(scroll, 1);
     auto *footer = new QWidget;
     auto *footer_layout = new QVBoxLayout(footer);
-    footer_layout->setContentsMargins(20, 12, 20, 16);
+    footer_layout->setContentsMargins(theme::space::footer);
     result_ = new QLabel;
     result_->setObjectName("stationResult");
     result_->setTextFormat(Qt::PlainText);
@@ -182,7 +182,7 @@ void GroundStationEditor::preview() {
         const auto xyz = core::ground_station_position({longitude_->value(Unit::radian),
                                                         latitude_->value(Unit::radian),
                                                         height_->value(Unit::metre)});
-        preview_->setText(QStringLiteral("ITRF 位置 / m\nX  %1\nY  %2\nZ  %3")
+        preview_->setText(QStringLiteral("X  %1\nY  %2\nZ  %3")
                               .arg(xyz[0], 0, 'f', 3)
                               .arg(xyz[1], 0, 'f', 3)
                               .arg(xyz[2], 0, 'f', 3));

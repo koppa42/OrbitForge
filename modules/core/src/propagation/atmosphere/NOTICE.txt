@@ -1,0 +1,21 @@
+OrbitForge atmospheric model adaptations
+
+Jacchia-Roberts scalar formulas and fitted tables derive from NASA GMAT:
+Copyright (c) 2002-2026 United States Government as represented by the
+Administrator of the National Aeronautics and Space Administration.
+Developed jointly by NASA/GSFC and Thinking Systems, Inc.; author Waka A. Waktola.
+Licensed under the Apache License, Version 2.0.
+Source commit: c9b78bd1c8499845cb78fde315e1f761b6b06f1c.
+
+NRLMSISE-00 scalar formulas and tables derive from Orekit 13.1.2:
+Copyright 2002-2025 CS GROUP. Licensed under the Apache License, Version 2.0.
+The original NRLMSISE-00 model was developed by Mike Picone, Alan Hedin and
+Doug Drob (Naval Research Laboratory). C translation by Dominik Brodowski;
+Java translation by Pascal Parraud. See Orekit-NOTICE.txt for upstream notices.
+
+OrbitForge modifications: standard-library C++ types; explicit SI/model inputs;
+per-evaluation local scratch arrays; no file lookup/global mutable atmosphere
+state; bounded Newton iterations; continuous Jacchia-Roberts angular/equinox
+limits; explicit validation and supported domains. Fitted coefficients are
+unchanged. The API adapter uses exact WGS84 geodetic height, manual constant
+space-weather inputs, and the effective drag density including anomalous oxygen.

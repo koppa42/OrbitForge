@@ -1,0 +1,17 @@
+[
+  {
+    "file": "JacchiaRobertsAtmosphere.cpp",
+    "url": "https://raw.githubusercontent.com/nasa/GMAT/c9b78bd1c8499845cb78fde315e1f761b6b06f1c/src/base/solarsys/JacchiaRobertsAtmosphere.cpp",
+    "sha256": "e4d4c077b27c8cb06a07454b6cef0cab68b7b2e6ed63d0b19df90f69a2696bdc"
+  },
+  {
+    "file": "JacchiaRobertsAtmosphere.hpp",
+    "url": "https://raw.githubusercontent.com/nasa/GMAT/c9b78bd1c8499845cb78fde315e1f761b6b06f1c/src/base/solarsys/JacchiaRobertsAtmosphere.hpp",
+    "sha256": "25b739a32fee12f17538210616125df087ab806eb68a076caa6df7db28e4c768"
+  },
+  {
+    "file": "NRLMSISE00.java",
+    "url": "https://raw.githubusercontent.com/CS-SI/Orekit/13.1.2/src/main/java/org/orekit/models/earth/atmosphere/NRLMSISE00.java",
+    "sha256": "7c8f8e147cee124441bc21d954a86079c6c51bb9a45d8bf3339707851b29b52f"
+  }
+]

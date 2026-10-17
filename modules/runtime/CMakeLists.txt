@@ -1,6 +1,6 @@
 orbitforge_module(orbitforge_runtime Runtime src/demo.cpp src/time_frames.cpp src/ephemeris.cpp
     src/two_body.cpp src/j2.cpp src/j4.cpp src/sgp4.cpp src/project.cpp src/data_catalog.cpp src/report.cpp src/access.cpp src/analysis.cpp
-    src/project_facade.cpp src/hpop.cpp src/mission.cpp)
+    src/tabulated_orbit.cpp src/project_facade.cpp src/hpop.cpp src/mission.cpp src/gravity.cpp src/space_weather.cpp src/ocean_tides.cpp)
 target_link_libraries(orbitforge_runtime PUBLIC OrbitForge::Application)
 target_link_libraries(orbitforge_runtime PRIVATE OrbitForge::Sgp4)
 target_include_directories(orbitforge_runtime SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/modules/application/third_party")

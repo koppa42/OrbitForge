@@ -190,6 +190,7 @@ def main():
     repository = Path(__file__).resolve().parents[2]
     for relative, name in (
         ('modules/providers/sgp4/third_party/LICENSE', 'SGP4.txt'),
+        ('modules/core/src/propagation/integrators/rklib-LICENSE.txt', 'rklib-LICENSE.txt'),
         ('modules/providers/spice/third_party/SatelliteToolbox-LICENSE.txt', 'SatelliteToolbox.txt'),
     ):
         (output / 'notices').mkdir(exist_ok=True)

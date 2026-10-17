@@ -82,7 +82,7 @@ struct AccessSession::Impl {
     Impl(ReportContext c, detail::AccessGeometry p)
         : context(std::move(c)), pair(std::move(p)),
           orbit(make_orbit_session(pair.satellite.orbit, 1, context.time.get(),
-                                   {context.frames, context.eop})) {}
+                                   context.force_environment(pair.satellite.orbit))) {}
 };
 AccessSession::AccessSession(ReportContext context, std::string station, std::string target) {
     application::validate_project(context.project);

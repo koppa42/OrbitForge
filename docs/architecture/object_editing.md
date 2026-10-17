@@ -111,6 +111,6 @@ Python `of.Project` 和 `of.load_project()` 现在返回事务门面。旧的可
 
 普通脚本不再修改 `project.satellites` 等列表。通过句柄操作对象；保存报告配置使用 `project.set_reports(definitions)`，读取旧配置可从显式 `to_data()` 副本取得。`project.earth_orientation = ...` 继续接受已明确选定的数据元信息，`None` 清空；`plan_prepare(data=...)` 提供数据确认计划，可传入固定的 `DataSnapshot` 或由 `DataCatalog` 按项目时段选源。
 
-`Project.open(path, data=...)` 校验所选数据，变化时通过 `DataChangedError.plan` 取得固定的打开计划；原始输入读取使用 `load_project_data()`。`save(path, analysis=...)` 可记录匹配的分析来源，普通保存保留现状。状态查询优先使用 `project.prepare()` 返回的 `Analysis`；`to_scenario(time=...)`、`generate_report(project, ...)` 和 `AccessSession(project, ...)` 继续捕获已提交输入，执行已有计算与数据匹配规则。文件包含仅 UTC 的来源和分析准备记录，以及报告查询/模板配置；仅读写当前 v14，旧格式明确拒绝，详见[分析 API](analysis_api.md)。
+`Project.open(path, data=...)` 校验所选数据，变化时通过 `DataChangedError.plan` 取得固定的打开计划；原始输入读取使用 `load_project_data()`。`save(path, analysis=...)` 可记录匹配的分析来源，普通保存保留现状。状态查询优先使用 `project.prepare()` 返回的 `Analysis`；`to_scenario(time=...)`、`generate_report(project, ...)` 和 `AccessSession(project, ...)` 继续捕获已提交输入，执行已有计算与数据匹配规则。文件包含仅 UTC 的来源和分析准备记录，以及报告查询/模板配置；仅读写当前 v40，旧格式明确拒绝，详见[分析 API](analysis_api.md)。
 
 完整示例见 [可见性分析](../../examples/python/access.py)和[保存项目](../../examples/python/save_project.py)。验证入口为 C++ `ProjectDocument.*` 集成测试、Python `test_objects.py`、原生文件与计算回归测试，以及安装后的 SDK 消费端。

@@ -1,6 +1,7 @@
 #include "ground_map.hpp"
 #include "track_style_editor.hpp"
 #include "workbench_profile.hpp"
+#include "workbench_theme.hpp"
 #include <QKeyEvent>
 #include <QLineF>
 #include <QMouseEvent>
@@ -365,7 +366,7 @@ void GroundMap::invalidate_tracks(bool geometry_changed) {
 void GroundMap::paint_background(QPainter &p, const QRectF &bounds) {
     p.setRenderHint(QPainter::Antialiasing);
     p.setRenderHint(QPainter::SmoothPixmapTransform);
-    p.fillRect(bounds, QColor("#080f18"));
+    p.fillRect(bounds, theme::color(theme::chrome));
     const auto area = map_rect();
     const auto transform = map_transform();
     p.save();
@@ -403,7 +404,7 @@ void GroundMap::paint_grid(QPainter &p) {
                           : area.width() > 3000 ? 10
                           : area.width() > 1600 ? 15
                                                 : 30;
-    p.setPen(QPen(QColor(177, 208, 233, 75), 0.7, Qt::DotLine));
+    p.setPen(QPen(theme::color(theme::accent, 60), 0.7, Qt::DotLine));
     for (int lon = -180; lon <= 180; lon += grid_step)
         p.drawLine(transform.map(QPointF(lon, -90)), transform.map(QPointF(lon, 90)));
     for (int lat = -90; lat <= 90; lat += grid_step)
@@ -416,7 +417,7 @@ void GroundMap::paint_axes(QPainter &p) {
                           : area.width() > 3000 ? 10
                           : area.width() > 1600 ? 15
                                                 : 30;
-    p.setPen(QColor("#7c94ad"));
+    p.setPen(theme::color(theme::text_muted));
     QFont mono("Consolas");
     mono.setPixelSize(10);
     p.setFont(mono);
@@ -472,7 +473,7 @@ GroundMap::Raster GroundMap::rasterize(Raster result, const std::vector<Stroke> 
             pen.setCosmetic(true);
             p.setPen(pen);
         } else {
-            auto halo = track_pen(QColor(4, 15, 26, 140), stroke.width, stroke.style);
+            auto halo = track_pen(theme::color(theme::canvas, 140), stroke.width, stroke.style);
             const auto dash = halo.dashPattern();
             halo.setWidthF(stroke.width + 1.5);
             if (stroke.style != application::LineStyle::solid) {
@@ -593,7 +594,7 @@ void GroundMap::set_access_link(std::optional<std::pair<std::size_t, std::size_t
 void GroundMap::paint_base(QPainter &p, const Raster *display) {
     p.setRenderHint(QPainter::Antialiasing);
     p.setRenderHint(QPainter::SmoothPixmapTransform);
-    p.fillRect(rect(), QColor("#080f18"));
+    p.fillRect(rect(), theme::color(theme::chrome));
     p.save();
     p.setClipRect(plot_rect());
     const auto draw = [&](const Raster &raster) {
@@ -656,7 +657,7 @@ void GroundMap::paintEvent(QPaintEvent *event) {
     p.setRenderHint(QPainter::Antialiasing);
     p.setRenderHint(QPainter::SmoothPixmapTransform);
     if (footer_only)
-        p.fillRect(event->rect(), QColor("#080f18"));
+        p.fillRect(event->rect(), theme::color(theme::chrome));
     else {
         // Reproject a complete cached image during zooming, only while its coverage
         // includes the whole viewport. A new exact-scale image still replaces it.
@@ -704,7 +705,7 @@ void GroundMap::paintEvent(QPaintEvent *event) {
         const auto label_context = font().toString() + '/' + QString::number(devicePixelRatioF());
         if (access_visible_ && access_pair_ && access_pair_->first < points_.size() &&
             access_pair_->second < points_.size()) {
-            p.setPen(QPen(QColor("#87d4c6"), 2, Qt::DashLine));
+            p.setPen(QPen(theme::color(theme::success), 2, Qt::DashLine));
             p.drawPath(
                 map_transform().map(ground_path({points_[access_pair_->first].geographic,
                                                  points_[access_pair_->second].geographic})));
@@ -713,11 +714,11 @@ void GroundMap::paintEvent(QPaintEvent *event) {
             const auto point = marker_position(i);
             if (!plot.contains(point))
                 continue;
-            p.setPen(QPen(QColor("#172d42"), 1.5));
-            p.setBrush(selected_ == i              ? QColor("#ffce81")
-                       : points_[i].ground_station ? QColor("#87d4c6")
+            p.setPen(QPen(theme::color(theme::canvas), 1.5));
+            p.setBrush(selected_ == i              ? theme::color(theme::sakura)
+                       : points_[i].ground_station ? theme::color(theme::success)
                        : i < tracks_.size()        ? QColor::fromRgb(tracks_[i].display.line_color)
-                                                   : QColor("#d0efff"));
+                                                   : theme::color(theme::accent_bright));
             if (points_[i].ground_station)
                 p.drawPolygon(QPolygonF{point + QPointF(0, -6), point + QPointF(6, 0),
                                         point + QPointF(0, 6), point + QPointF(-6, 0)});
@@ -725,7 +726,7 @@ void GroundMap::paintEvent(QPaintEvent *event) {
                 p.drawEllipse(point, 4, 4);
             if (selected_ == i) {
                 p.setBrush(Qt::NoBrush);
-                p.setPen(QPen(QColor("#ffce81"), 1));
+                p.setPen(QPen(theme::color(theme::sakura), 1));
                 p.drawEllipse(point, 8, 8);
             }
             if (!labels_ || (i < tracks_.size() && !tracks_[i].label))
@@ -753,10 +754,10 @@ void GroundMap::paintEvent(QPaintEvent *event) {
                     text.setRenderHint(QPainter::Antialiasing);
                     text.setFont(font());
                     text.setPen(Qt::NoPen);
-                    text.setBrush(QColor(13, 32, 49, 215));
+                    text.setBrush(theme::color(theme::chrome, 220));
                     const QRectF bounds(QPointF(0, 0), label.size());
                     text.drawRoundedRect(bounds, 3, 3);
-                    text.setPen(QColor("#d9e9f6"));
+                    text.setPen(theme::color(theme::text));
                     text.drawText(bounds, Qt::AlignCenter, name);
                 }
                 image = prepared.get();
@@ -770,7 +771,7 @@ void GroundMap::paintEvent(QPaintEvent *event) {
         p.restore();
     }
     p.setFont(font());
-    p.setPen(QColor("#92aac2"));
+    p.setPen(theme::color(theme::text_muted));
     QString caption = QStringLiteral("WGS84 · 等距圆柱   |   滚轮缩放 · 拖动平移");
     if (cursor_position_) {
         const auto ll = map_transform().inverted().map(*cursor_position_);

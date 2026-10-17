@@ -1,10 +1,10 @@
 #include "welcome_page.hpp"
 #include "workbench_style.hpp"
+#include "workbench_theme.hpp"
 #include <QAction>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPainter>
-#include <QPainterPath>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollArea>
@@ -13,35 +13,19 @@
 
 namespace orbitforge::desktop {
 namespace {
-class WelcomeArtwork final : public QWidget {
+constexpr int narrow_width = 720;
+
+// The artwork fills the whole page (cover, anchored on the figure). A canvas-coloured veil
+// on the left keeps the copy and actions legible; narrow pages veil the whole picture.
+class WelcomeBackdrop final : public QWidget {
   public:
-    WelcomeArtwork() : artwork_(":/orbitforge/artwork/orbital-welcome.png") {
-        setMinimumHeight(460);
-        setMaximumHeight(540);
-        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    }
-    QBoxLayout *actions = nullptr;
-    QHBoxLayout *content = nullptr;
+    WelcomeBackdrop() : artwork_(":/orbitforge/artwork/orbital-welcome.png") {}
 
   protected:
-    void resizeEvent(QResizeEvent *) override {
-        const bool narrow = width() < 620;
-        if (actions)
-            actions->setDirection(narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
-        if (content) {
-            content->setContentsMargins(narrow ? 24 : 40, 32, narrow ? 24 : 40, 32);
-            content->setStretch(1, narrow ? 0 : 1);
-        }
-    }
     void paintEvent(QPaintEvent *) override {
         QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
         painter.setRenderHint(QPainter::SmoothPixmapTransform);
-        const auto bounds = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-        QPainterPath clip;
-        clip.addRoundedRect(bounds, 20, 20);
-        painter.setClipPath(clip);
-        painter.fillRect(rect(), QColor("#172638"));
+        painter.fillRect(rect(), theme::color(theme::canvas));
         if (!artwork_.isNull()) {
             const auto scale =
                 std::max(width() / double(artwork_.width()), height() / double(artwork_.height()));
@@ -49,56 +33,94 @@ class WelcomeArtwork final : public QWidget {
             const QRectF source((artwork_.width() - source_size.width()) * 0.78,
                                 (artwork_.height() - source_size.height()) * 0.15,
                                 source_size.width(), source_size.height());
-            painter.drawPixmap(bounds, artwork_, source);
+            painter.drawPixmap(QRectF(rect()), artwork_, source);
         }
-        QLinearGradient shade(0, 0, width(), 0);
-        shade.setColorAt(0, QColor(15, 27, 41, 245));
-        shade.setColorAt(0.38, QColor(15, 27, 41, 205));
-        shade.setColorAt(0.72, QColor(15, 27, 41, width() < 620 ? 140 : 35));
-        shade.setColorAt(1, QColor(15, 27, 41, width() < 620 ? 100 : 8));
-        painter.fillRect(rect(), shade);
-        // Static celestial accents keep the welcome page quiet while it is idle.
-        painter.setPen(QPen(QColor(220, 190, 240, 55), 1));
-        painter.drawEllipse(QPointF(width() - 78, 78), 35, 35);
-        painter.drawEllipse(QPointF(width() - 78, 78), 43, 43);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor("#ecc4df"));
-        const QPointF star(width() - 78, 78);
-        painter.drawPolygon(QPolygonF{star + QPointF(0, -10), star + QPointF(3, -3),
-                                      star + QPointF(10, 0), star + QPointF(3, 3),
-                                      star + QPointF(0, 10), star + QPointF(-3, 3),
-                                      star + QPointF(-10, 0), star + QPointF(-3, -3)});
-        painter.setClipping(false);
-        painter.setBrush(Qt::NoBrush);
-        painter.setPen(QColor("#3c566b"));
-        painter.drawRoundedRect(bounds, 20, 20);
+        const bool narrow = width() < narrow_width;
+        QLinearGradient veil(0, 0, width(), 0);
+        for (const auto &[stop, alpha] :
+             {std::pair{0.0, 245}, std::pair{0.32, narrow ? 225 : 215},
+              std::pair{0.58, narrow ? 215 : 90}, std::pair{1.0, narrow ? 200 : 0}})
+            veil.setColorAt(stop, theme::color(theme::canvas, alpha));
+        painter.fillRect(rect(), veil);
+        QLinearGradient floor(0, height() * 0.6, 0, height());
+        floor.setColorAt(0, theme::color(theme::canvas, 0));
+        floor.setColorAt(1, theme::color(theme::canvas, 190));
+        painter.fillRect(rect(), floor);
     }
 
   private:
     QPixmap artwork_;
 };
 
-class WelcomeFooter final : public QWidget {
+// A launcher row. Child labels are presentation only, so the button keeps the usual click,
+// keyboard and accessibility behaviour; height follows the wrapped text.
+class ActionCard final : public QPushButton {
   public:
-    WelcomeFooter() {
-        auto *caption = new QLabel(QStringLiteral("星夜相伴 · 探索有据"));
-        caption->setObjectName("welcomeCaption");
-        auto *shortcuts = new QLabel(QStringLiteral("Ctrl+N 新建  /  Ctrl+O 打开"));
-        shortcuts->setObjectName("welcomeCaption");
-        layout_ = new QBoxLayout(QBoxLayout::LeftToRight, this);
-        layout_->setContentsMargins(0, 0, 0, 0);
-        layout_->setSpacing(8);
-        layout_->addWidget(caption, 1);
-        layout_->addWidget(shortcuts, 0, Qt::AlignRight);
+    ActionCard(const char *name, WorkbenchIcon icon, const char *tone, const QString &title,
+               const QString &text, const QString &shortcut) {
+        setObjectName(name);
+        setAccessibleName(title);
+        setToolTip(shortcut.isEmpty() ? title : title + QStringLiteral(" · ") + shortcut);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        auto *layout = new QHBoxLayout(this);
+        layout->setContentsMargins(theme::space::card);
+        layout->setSpacing(12);
+        const QByteArray kind(tone);
+        auto *symbol = new QLabel;
+        symbol->setObjectName("welcomeCardIcon");
+        symbol->setProperty("tone", tone);
+        symbol->setFixedSize(32, 32);
+        symbol->setAlignment(Qt::AlignCenter);
+        symbol->setPixmap(workbench_icon(icon, theme::color(kind == "primary"  ? theme::on_accent
+                                                            : kind == "sakura" ? theme::sakura
+                                                                               : theme::accent))
+                              .pixmap(18, 18));
+        layout->addWidget(symbol, 0, Qt::AlignVCenter);
+        auto *copy = new QVBoxLayout;
+        copy->setContentsMargins(0, 0, 0, 0);
+        copy->setSpacing(2);
+        auto *heading = new QLabel(title);
+        heading->setObjectName("welcomeCardTitle");
+        heading->setWordWrap(true);
+        copy->addWidget(heading);
+        auto *detail = new QLabel(text);
+        detail->setObjectName("welcomeCardText");
+        detail->setWordWrap(true);
+        // Wrapped labels otherwise report a wide minimum and force horizontal scrolling.
+        for (auto *label : {heading, detail})
+            label->setMinimumWidth(1);
+        copy->addWidget(detail);
+        layout->addLayout(copy, 1);
+        if (!shortcut.isEmpty()) {
+            auto *key = new QLabel(shortcut);
+            key->setObjectName("welcomeKey");
+            layout->addWidget(key, 0, Qt::AlignVCenter);
+        }
+        for (auto *child : findChildren<QWidget *>())
+            child->setAttribute(Qt::WA_TransparentForMouseEvents);
     }
+    [[nodiscard]] QSize sizeHint() const override { return layout()->sizeHint(); }
+    [[nodiscard]] QSize minimumSizeHint() const override { return layout()->minimumSize(); }
+    [[nodiscard]] bool hasHeightForWidth() const override { return true; }
+    [[nodiscard]] int heightForWidth(int width) const override {
+        return layout()->totalHeightForWidth(width);
+    }
+};
+
+// The side margin follows the page width so the column sits in the artwork's open sky.
+class WelcomeColumn final : public QWidget {
+  public:
+    QBoxLayout *outer = nullptr;
 
   protected:
-    void resizeEvent(QResizeEvent *) override {
-        layout_->setDirection(width() < 620 ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    void resizeEvent(QResizeEvent *event) override {
+        if (outer) {
+            const int width = event->size().width();
+            const int side = width < narrow_width ? 24 : std::clamp(width / 12, 40, 120);
+            outer->setContentsMargins(side, 40, side, 28);
+        }
+        QWidget::resizeEvent(event);
     }
-
-  private:
-    QBoxLayout *layout_ = nullptr;
 };
 } // namespace
 
@@ -107,33 +129,31 @@ QWidget *make_welcome_page(QAction *create, QAction *open, QAction *example) {
     scroll->setObjectName("welcomeScroll");
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
-    auto *page = new QWidget;
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto *page = new WelcomeBackdrop;
     page->setObjectName("welcome");
     scroll->setWidget(page);
-    auto *outer = new QVBoxLayout(page);
-    outer->setContentsMargins(24, 28, 24, 28);
-    outer->addStretch();
-    auto *content = new QWidget;
-    content->setMaximumWidth(1140);
-    content->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    auto *stack = new QVBoxLayout(content);
-    stack->setContentsMargins(0, 0, 0, 0);
-    stack->setSpacing(18);
-    auto *hero = new WelcomeArtwork;
-    auto *hero_layout = new QHBoxLayout(hero);
-    hero->content = hero_layout;
-    hero_layout->setContentsMargins(40, 32, 40, 32);
-    auto *copy = new QWidget;
-    copy->setMaximumWidth(420);
-    auto *layout = new QVBoxLayout(copy);
+    auto *page_layout = new QVBoxLayout(page);
+    page_layout->setContentsMargins(0, 0, 0, 0);
+    auto *column_host = new WelcomeColumn;
+    page_layout->addWidget(column_host);
+    auto *outer = new QVBoxLayout(column_host);
+    column_host->outer = outer;
+    outer->setContentsMargins(40, 40, 40, 28);
+    outer->setSpacing(0);
+    outer->addStretch(3);
+
+    auto *column = new QWidget;
+    column->setMaximumWidth(420);
+    auto *layout = new QVBoxLayout(column);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(14);
-    layout->addStretch();
-    auto *brand = new QLabel("O R B I T F O R G E");
+    layout->setSpacing(12);
+    auto *brand = new QLabel(QStringLiteral("ORBITFORGE"));
     brand->setObjectName("eyebrow");
     layout->addWidget(brand);
     auto *heading =
-        new QLabel(QStringLiteral("下一站，<br><span style='color:#ecc4df'>你的轨道。</span>"));
+        new QLabel(QStringLiteral("下一站，<br><span style='color:%1'>你的轨道。</span>")
+                       .arg(theme::color(theme::sakura).name()));
     heading->setObjectName("welcomeTitle");
     heading->setWordWrap(true);
     layout->addWidget(heading);
@@ -143,40 +163,28 @@ QWidget *make_welcome_page(QAction *create, QAction *open, QAction *example) {
     description->setWordWrap(true);
     layout->addWidget(description);
     layout->addSpacing(14);
-    auto *actions = new QHBoxLayout;
-    hero->actions = actions;
-    actions->setSpacing(10);
-    auto *new_button = new QPushButton(workbench_icon(WorkbenchIcon::new_scenario, Qt::white),
-                                       QStringLiteral("新建场景"));
-    new_button->setObjectName("welcomeCreate");
-    new_button->setProperty("primary", true);
-    new_button->setMinimumHeight(28);
-    new_button->setToolTip(QStringLiteral("新建场景 · Ctrl+N"));
+
+    auto *new_button = new ActionCard(
+        "welcomeCreate", WorkbenchIcon::new_scenario, "primary", QStringLiteral("新建场景"),
+        QStringLiteral("设定分析时段与地球定向数据，从空白场景开始。"), QStringLiteral("Ctrl+N"));
     QObject::connect(new_button, &QPushButton::clicked, create, &QAction::trigger);
-    auto *open_button =
-        new QPushButton(workbench_icon(WorkbenchIcon::folder), QStringLiteral("打开项目…"));
-    open_button->setObjectName("welcomeOpen");
-    open_button->setMinimumHeight(28);
-    open_button->setToolTip(QStringLiteral("打开项目 · Ctrl+O"));
+    auto *open_button = new ActionCard(
+        "welcomeOpen", WorkbenchIcon::folder, "accent", QStringLiteral("打开项目…"),
+        QStringLiteral("继续编辑已保存的 .orbitforge 项目。"), QStringLiteral("Ctrl+O"));
     QObject::connect(open_button, &QPushButton::clicked, open, &QAction::trigger);
-    actions->addWidget(new_button);
-    actions->addWidget(open_button);
-    layout->addLayout(actions);
-    auto *example_button = new QPushButton(QStringLiteral("先试试二体示例  →"));
-    example_button->setObjectName("welcomeExample");
+    auto *example_button =
+        new ActionCard("welcomeExample", WorkbenchIcon::orbit, "sakura", QStringLiteral("二体示例"),
+                       QStringLiteral("载入预置卫星，立即查看三维轨道与地面轨迹。"), QString{});
     QObject::connect(example_button, &QPushButton::clicked, example, &QAction::trigger);
-    layout->addWidget(example_button, 0, Qt::AlignLeft);
-    layout->addStretch();
-    hero_layout->addWidget(copy, 1);
-    hero_layout->addStretch(1);
-    stack->addWidget(hero);
-    stack->addWidget(new WelcomeFooter);
-    auto *center = new QHBoxLayout;
-    center->addStretch();
-    center->addWidget(content, 100);
-    center->addStretch();
-    outer->addLayout(center);
-    outer->addStretch();
+    layout->addWidget(new_button);
+    layout->addWidget(open_button);
+    layout->addWidget(example_button);
+    outer->addWidget(column);
+    outer->addStretch(4);
+
+    auto *caption = new QLabel(QStringLiteral("星夜相伴 · 探索有据"));
+    caption->setObjectName("welcomeCaption");
+    outer->addWidget(caption);
     return scroll;
 }
 } // namespace orbitforge::desktop

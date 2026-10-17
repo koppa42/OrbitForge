@@ -25,7 +25,7 @@ std::optional<InsertObjectRequest> insert_object_dialog(QWidget *parent,
     dialog.resize(QSize(780, 440).boundedTo(available).expandedTo(dialog.minimumSize()));
     dialog.setSizeGripEnabled(true);
     auto *layout = new QVBoxLayout(&dialog);
-    layout->setContentsMargins(24, 22, 24, 20);
+    layout->setContentsMargins(theme::space::page);
     layout->setSpacing(16);
 
     auto *heading = new QHBoxLayout;
@@ -63,12 +63,13 @@ std::optional<InsertObjectRequest> insert_object_dialog(QWidget *parent,
     types->setMinimumWidth(160);
     auto *group = new QTreeWidgetItem(types, {QStringLiteral("场景对象")});
     group->setFlags(Qt::ItemIsEnabled);
-    group->setForeground(0, QColor("#8c9db1"));
+    group->setForeground(0, theme::color(theme::text_muted));
     auto *satellite = new QTreeWidgetItem(group, {QStringLiteral("卫星")});
-    satellite->setIcon(0, workbench_icon(WorkbenchIcon::satellite, QColor("#80b9e4")));
+    satellite->setIcon(0, workbench_icon(WorkbenchIcon::satellite, theme::color(theme::accent)));
     satellite->setData(0, Qt::UserRole, static_cast<int>(InsertObjectType::satellite));
     auto *station = new QTreeWidgetItem(group, {QStringLiteral("地面站")});
-    station->setIcon(0, workbench_icon(WorkbenchIcon::ground_station, QColor("#87d4c6")));
+    station->setIcon(0,
+                     workbench_icon(WorkbenchIcon::ground_station, theme::color(theme::success)));
     station->setData(0, Qt::UserRole, static_cast<int>(InsertObjectType::ground_station));
     group->setExpanded(true);
     types->setCurrentItem(satellite);
@@ -92,7 +93,7 @@ std::optional<InsertObjectRequest> insert_object_dialog(QWidget *parent,
         card->setObjectName("choiceCard");
         card->setProperty("selected", false);
         auto *card_layout = new QVBoxLayout(card);
-        card_layout->setContentsMargins(14, 12, 14, 12);
+        card_layout->setContentsMargins(theme::space::card);
         card_layout->setSpacing(2);
         card_layout->addWidget(choice);
         auto *caption = new QLabel(description);

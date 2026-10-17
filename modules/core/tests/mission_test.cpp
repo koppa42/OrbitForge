@@ -26,7 +26,9 @@ CartesianState initial() {
     return {Epoch{0}, OriginId::earth, FrameId::gcrf, {7e6, 0, 0}, {0, 7500, 0}};
 }
 CoastFactory linear() {
-    return [](CartesianState state) { return std::make_shared<LinearCoast>(state); };
+    return [](CartesianState state, Epoch, const std::function<void()> &) {
+        return std::make_shared<LinearCoast>(state);
+    };
 }
 } // namespace
 TEST(Mission, SequentialImpulsesAreRightContinuousAndQueriesIndependent) {
@@ -109,29 +111,46 @@ TEST(Mission, ValidatesDurationsLimitsOverflowAndFiniteBurns) {
     EXPECT_THROW((void)validate_mission(Epoch{0}, plan), std::invalid_argument);
 }
 TEST(Mission, HpopPointMassHohmannTransferMatchesAnalyticApoapsisAndCircularization) {
-    constexpr double r1 = 7e6, r2 = 8e6;
-    const double a = (r1 + r2) / 2;
-    const double transfer_time = std::numbers::pi * std::sqrt(a * a * a / egm96_mu);
-    const auto transfer = std::chrono::nanoseconds{std::llround(transfer_time * 1e9)};
-    const double dv1 = std::sqrt(egm96_mu * (2 / r1 - 1 / a)) - std::sqrt(egm96_mu / r1);
-    const double dv2 = std::sqrt(egm96_mu / r2) - std::sqrt(egm96_mu * (2 / r2 - 1 / a));
-    auto start = initial();
-    start.velocity_mps = {0, std::sqrt(egm96_mu / r1), 0};
-    HpopOptions options;
-    options.gravity_degree = options.gravity_order = 0;
-    MissionPlan plan{MissionCoastModel::hpop,
-                     {MissionSegment::impulse({dv1, 0, 0}), MissionSegment::coast(transfer),
-                      MissionSegment::impulse({dv2, 0, 0}), MissionSegment::coast(3600s)}};
-    const auto provider = make_mission(
-        start, plan, [options](CartesianState state) { return make_hpop(state, options); });
-    const auto apo = provider->state_at(Epoch{transfer.count()});
-    EXPECT_NEAR(apo.position_m[0], -r2, 0.02);
-    EXPECT_NEAR(apo.position_m[1], 0, 0.02);
-    EXPECT_NEAR(apo.velocity_mps[0], 0, 2e-5);
-    EXPECT_NEAR(apo.velocity_mps[1], -std::sqrt(egm96_mu / r2), 2e-5);
-    const auto later = provider->state_at(Epoch{transfer.count() + 3600'000'000'000LL});
-    EXPECT_NEAR(std::hypot(later.position_m[0], later.position_m[1], later.position_m[2]), r2,
-                0.05);
-    EXPECT_NEAR(provider->maneuvers(start.epoch, later.epoch).back().cumulative_delta_v_mps,
-                dv1 + dv2, 1e-9);
+    for (bool vop : {false, true})
+        for (bool regularized : {false, true}) {
+            SCOPED_TRACE(vop);
+
+            constexpr double r1 = 7e6, r2 = 8e6;
+            const double a = (r1 + r2) / 2;
+            const double transfer_time = std::numbers::pi * std::sqrt(a * a * a / egm96_mu);
+            const auto transfer = std::chrono::nanoseconds{std::llround(transfer_time * 1e9)};
+            const double dv1 = std::sqrt(egm96_mu * (2 / r1 - 1 / a)) - std::sqrt(egm96_mu / r1);
+            const double dv2 = std::sqrt(egm96_mu / r2) - std::sqrt(egm96_mu * (2 / r2 - 1 / a));
+            auto start = initial();
+            start.velocity_mps = {0, std::sqrt(egm96_mu / r1), 0};
+            HpopOptions options;
+            options.gravity_degree = options.gravity_order = 0;
+            MissionPlan plan{MissionCoastModel::hpop,
+                             {MissionSegment::impulse({dv1, 0, 0}), MissionSegment::coast(transfer),
+                              MissionSegment::impulse({dv2, 0, 0}), MissionSegment::coast(3600s)}};
+            for (auto integrator : {HpopIntegrator::rkf78, HpopIntegrator::bulirsch_stoer,
+                                    HpopIntegrator::gauss_jackson}) {
+                options.integrator = integrator;
+                options.vop = vop;
+                options.time_regularization = regularized;
+                options.steps_per_orbit = 480;
+                const auto provider = make_mission(
+                    start, plan,
+                    [options](CartesianState state, Epoch, const std::function<void()> &) {
+                        return make_hpop(state, options);
+                    });
+                const auto apo = provider->state_at(Epoch{transfer.count()});
+                EXPECT_NEAR(apo.position_m[0], -r2, 0.02);
+                EXPECT_NEAR(apo.position_m[1], 0, 0.02);
+                EXPECT_NEAR(apo.velocity_mps[0], 0, 2e-5);
+                EXPECT_NEAR(apo.velocity_mps[1], -std::sqrt(egm96_mu / r2), 2e-5);
+                const auto later = provider->state_at(Epoch{transfer.count() + 3600'000'000'000LL});
+                EXPECT_NEAR(
+                    std::hypot(later.position_m[0], later.position_m[1], later.position_m[2]), r2,
+                    0.05);
+                EXPECT_NEAR(
+                    provider->maneuvers(start.epoch, later.epoch).back().cumulative_delta_v_mps,
+                    dv1 + dv2, 1e-9);
+            }
+        }
 }

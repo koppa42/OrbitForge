@@ -17,7 +17,8 @@ namespace {
 constexpr qint64 day_ms = 86'400'000;
 constexpr qint64 minimum_span = 1'000;
 const QDateTime origin(QDate(2000, 1, 1), QTime(12, 0), QTimeZone::UTC);
-const QColor cursor_color("#e4b16c");
+// The current time matches the star-blue time readout; sakura marks the object's interval.
+const QColor cursor_color = theme::color(theme::accent_bright);
 QString scale_name(CalendarScale scale) {
     return scale == CalendarScale::utc ? "UTC" : scale == CalendarScale::tai ? "TAI" : "TT";
 }
@@ -223,58 +224,67 @@ std::vector<qint64> MissionTimeline::ruler_ticks() const {
 void MissionTimeline::paintEvent(QPaintEvent *) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    p.fillRect(rect(), QColor("#171e27"));
+    // Transparent: the timeline sits inside the rounded workbench timeline card.
     const auto overview = overview_rect();
     const auto detail = detail_rect();
     const auto left = detail.left(), right = detail.right();
-    p.fillRect(QRectF(0, 0, left - 10, height()), QColor("#1d2a35"));
-    p.setPen(QColor("#2f4250"));
+    p.setPen(theme::color(theme::line));
     p.drawLine(QPointF(0, 41), QPointF(width(), 41));
     p.drawLine(QPointF(left - 10, 0), QPointF(left - 10, height()));
 
-    p.setPen(QColor("#b6c5d7"));
+    // Label column: a heading per band with its secondary value in a smaller muted face.
+    auto caption = font();
+    caption.setPixelSize(std::max(10, font().pixelSize() - 1));
+    p.setPen(theme::color(theme::text_soft));
     p.drawText(QRectF(16, 2, left - 32, 20), Qt::AlignVCenter, QStringLiteral("场景总览"));
-    p.setPen(QColor("#8396ac"));
-    p.drawText(QRectF(16, 21, left - 32, 16), Qt::AlignVCenter, duration_text(last_ - first_));
     p.drawText(QRectF(16, 48, left - 32, 18), Qt::AlignVCenter,
-               QStringLiteral("时间 / ") + scale_name(scale_));
+               QStringLiteral("时间 · ") + scale_name(scale_));
+    p.setFont(caption);
+    p.setPen(theme::color(theme::text_muted));
+    p.drawText(QRectF(16, 21, left - 32, 16), Qt::AlignVCenter,
+               QStringLiteral("全长 ") + duration_text(last_ - first_));
     p.drawText(QRectF(16, 66, left - 32, 16), Qt::AlignVCenter,
                QStringLiteral("可视 ") + duration_text(view_last_ - view_first_));
 
-    QFont mono("Consolas");
+    QFont mono;
+    mono.setFamilies({"Cascadia Mono", "Consolas"});
     mono.setPixelSize(11);
     p.setFont(mono);
-    p.setPen(QColor("#90a4bc"));
+    p.setPen(theme::color(theme::text_muted));
     // Always include both endpoint dates, even for an exact one-day scenario.
     p.drawText(QRectF(left, 1, detail.width() / 2, 18), Qt::AlignLeft | Qt::AlignVCenter,
                full_time(first_, scale_, *time_).left(20));
     p.drawText(QRectF(left + detail.width() / 2, 1, detail.width() / 2, 18),
                Qt::AlignRight | Qt::AlignVCenter, full_time(last_, scale_, *time_).left(20));
-    p.fillRect(overview, QColor("#121820"));
-    p.setPen(QColor("#314b5d"));
-    for (int i = 0; i <= 24; ++i) {
-        const auto x = left + overview.width() * i / 24;
-        p.drawLine(QPointF(x, overview.top()), QPointF(x, overview.bottom()));
+    // Overview: a quiet rounded groove with quarter marks; the visible window is a soft
+    // star-blue lens with grab handles.
+    p.setPen(Qt::NoPen);
+    p.setBrush(theme::color(theme::canvas));
+    p.drawRoundedRect(overview, 3, 3);
+    p.setPen(theme::color(theme::line));
+    for (int i = 1; i < 4; ++i) {
+        const auto x = left + overview.width() * i / 4;
+        p.drawLine(QPointF(x, overview.top() + 3), QPointF(x, overview.bottom() - 3));
     }
     const double a = position_at(view_first_, true), b = position_at(view_last_, true);
-    p.fillRect(QRectF(a, overview.top(), std::max(2.0, b - a), overview.height()),
-               QColor("#294659"));
-    p.setPen(QPen(QColor("#8eb6ca"), 1));
-    p.setBrush(Qt::NoBrush);
-    p.drawRect(QRectF(a, overview.top(), std::max(2.0, b - a), overview.height()));
+    const QRectF lens(a, overview.top(), std::max(2.0, b - a), overview.height());
+    p.setPen(QPen(theme::color(theme::accent, 150), 1));
+    p.setBrush(theme::color(theme::accent, 55));
+    p.drawRoundedRect(lens.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3);
     if (b - a >= 18) {
-        p.setPen(QPen(QColor("#c0caff"), 2));
-        for (double x : {a + 3, b - 3})
-            p.drawLine(QPointF(x, overview.top() + 3), QPointF(x, overview.bottom() - 3));
+        p.setPen(QPen(theme::color(theme::accent_bright), 1.5, Qt::SolidLine, Qt::RoundCap));
+        for (double x : {a + 4, b - 4})
+            p.drawLine(QPointF(x, overview.top() + 4), QPointF(x, overview.bottom() - 4));
     }
-    p.setPen(QPen(cursor_color, 2));
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(cursor_color, 1.5));
     const double overview_cursor = position_at(current_, true);
     p.drawLine(QPointF(overview_cursor, overview.top() - 2),
                QPointF(overview_cursor, overview.bottom() + 2));
 
     p.save();
     p.setClipRect(detail.adjusted(-1, 0, 1, 0));
-    p.setPen(QColor("#91a6bc"));
+    p.setPen(theme::color(theme::text_muted));
     p.drawText(QRectF(left, 45, 110, 17), Qt::AlignLeft | Qt::AlignVCenter,
                full_time(view_first_, scale_, *time_).left(10));
     p.drawText(QRectF(right - 110, 45, 110, 17), Qt::AlignRight | Qt::AlignVCenter,
@@ -286,7 +296,7 @@ void MissionTimeline::paintEvent(QPaintEvent *) {
     const auto ticks = ruler_ticks();
     // Five subdivisions per major SI interval, with calendar-aligned major ticks.
     for (std::size_t i = 1; i < ticks.size(); ++i) {
-        p.setPen(QColor("#415f74"));
+        p.setPen(theme::color(theme::border));
         for (int part = 1; part < 5; ++part) {
             const auto epoch = ticks[i - 1] + (ticks[i] - ticks[i - 1]) * part / 5;
             const auto x = position_at(epoch);
@@ -296,73 +306,79 @@ void MissionTimeline::paintEvent(QPaintEvent *) {
     const double label_width = step < 1000 ? 84 : 62;
     for (const auto epoch : ticks) {
         const auto x = position_at(epoch);
-        p.setPen(QColor("#2b3c4c"));
+        p.setPen(theme::color(theme::border, 110));
         p.drawLine(QPointF(x, 86), QPointF(x, 139));
-        p.setPen(QColor("#5c7690"));
+        p.setPen(theme::color(theme::border_strong));
         p.drawLine(QPointF(x, 78), QPointF(x, 86));
         if (x - left > label_width * 1.6 && right - x > label_width * 1.6) {
-            p.setPen(QColor("#a5bcd3"));
+            p.setPen(theme::color(theme::text_soft));
             p.drawText(QRectF(x - label_width / 2, 62, label_width, 17), Qt::AlignCenter,
                        label(epoch));
             if (view_last_ - view_first_ >= day_ms * 2) {
-                p.setPen(QColor("#8396ac"));
+                p.setPen(theme::color(theme::text_muted));
                 p.drawText(QRectF(x - 40, 45, 80, 17), Qt::AlignCenter,
                            full_time(epoch, scale_, *time_).mid(5, 5));
             }
         }
     }
-    p.setPen(QColor("#c1d0e1"));
+    p.setPen(theme::color(theme::text));
     p.drawText(QRectF(left, 62, label_width + 4, 17), Qt::AlignLeft | Qt::AlignVCenter,
                label(view_first_));
     p.drawText(QRectF(right - label_width - 4, 62, label_width + 4, 17),
                Qt::AlignRight | Qt::AlignVCenter, label(view_last_));
-    p.setPen(QColor("#455d76"));
+    p.setPen(theme::color(theme::border_strong));
     p.drawLine(QPointF(left, 85), QPointF(right, 85));
     p.restore();
 
-    static const auto scenario_icon = workbench_icon(WorkbenchIcon::earth);
-    static const auto satellite_icon = workbench_icon(WorkbenchIcon::satellite);
-    const auto track = [&](double y, const QString &name, const QString &caption, const QIcon &icon,
-                           const QColor &fill, const QColor &edge) {
+    static const auto scenario_icon =
+        workbench_icon(WorkbenchIcon::earth, theme::color(theme::accent));
+    static const auto satellite_icon =
+        workbench_icon(WorkbenchIcon::satellite, theme::color(theme::sakura));
+    // Interval bars: translucent fill with a solid leading stripe in the track's colour.
+    const auto track = [&](double y, const QString &name, const QString &label_text,
+                           const QIcon &icon, const theme::Token &tone) {
         p.setFont(font());
-        p.setPen(QColor("#bacadd"));
+        p.setPen(theme::color(theme::text_soft));
         p.drawPixmap(QRect(16, static_cast<int>(y) + 2, 14, 14), icon.pixmap(28, 28));
         p.drawText(QRectF(38, y, left - 56, 18), Qt::AlignVCenter,
                    fontMetrics().elidedText(name, Qt::ElideRight, static_cast<int>(left - 58)));
-        p.setPen(edge);
-        p.setBrush(fill);
-        p.drawRoundedRect(QRectF(left, y, detail.width(), 18), 3, 3);
-        p.setPen(QColor("#b4cfe6"));
-        p.drawText(QRectF(left + 9, y, detail.width() - 18, 18), Qt::AlignVCenter, caption);
+        const QRectF bar(left, y + 1, detail.width(), 16);
+        p.setPen(Qt::NoPen);
+        p.setBrush(theme::color(tone, 48));
+        p.drawRoundedRect(bar, 4, 4);
+        p.setBrush(theme::color(tone));
+        p.drawRoundedRect(QRectF(bar.left(), bar.top(), 3, bar.height()), 1.5, 1.5);
+        p.setFont(caption);
+        p.setPen(theme::color(theme::text_soft));
+        p.drawText(bar.adjusted(10, 0, -10, 0), Qt::AlignVCenter, label_text);
+        p.setFont(font());
     };
-    track(91, scenario_, QStringLiteral("场景分析区间"), scenario_icon, QColor("#294254"),
-          QColor("#648fa6"));
+    track(91, scenario_, QStringLiteral("场景分析区间"), scenario_icon, theme::accent);
     if (show_object_interval_ && !object_.isEmpty())
-        track(117, object_, QStringLiteral("轨道传播"), satellite_icon, QColor("#233e49"),
-              QColor("#4e8090"));
+        track(117, object_, QStringLiteral("轨道传播"), satellite_icon, theme::sakura);
     else if (show_object_interval_) {
         p.setFont(font());
-        p.setPen(QColor("#8c9eb4"));
+        p.setPen(theme::color(theme::text_muted));
         p.drawText(QRectF(left + 9, 117, detail.width() - 18, 18), Qt::AlignVCenter,
                    QStringLiteral("选择卫星查看传播区间"));
     }
     p.setPen(QPen(cursor_color, 1.5));
     if (!access_label_.isEmpty()) {
         const double y = show_object_interval_ ? 143 : 117;
-        p.setPen(QColor("#87d4c6"));
+        p.setPen(theme::color(theme::success));
         p.drawText(QRectF(16, y, left - 32, 18), Qt::AlignVCenter,
                    fontMetrics().elidedText(QStringLiteral("可见 · ") + access_label_,
                                             Qt::ElideRight, static_cast<int>(left - 32)));
         p.save();
         p.setClipRect(QRectF(left, y, detail.width(), 18));
         p.setPen(Qt::NoPen);
-        p.setBrush(QColor("#528f89"));
+        p.setBrush(theme::color(theme::success, 140));
         for (const auto &[begin, end] : access_intervals_)
-            p.drawRoundedRect(QRectF(position_at(begin), y + 2,
-                                     std::max(2.0, position_at(end) - position_at(begin)), 14),
+            p.drawRoundedRect(QRectF(position_at(begin), y + 3,
+                                     std::max(2.0, position_at(end) - position_at(begin)), 12),
                               3, 3);
         if (access_intervals_.empty()) {
-            p.setPen(QColor("#8c9eb4"));
+            p.setPen(theme::color(theme::text_muted));
             p.drawText(QRectF(left + 9, y, detail.width() - 18, 18), Qt::AlignVCenter,
                        QStringLiteral("无可见时段"));
         }
@@ -382,7 +398,7 @@ void MissionTimeline::paintEvent(QPaintEvent *) {
                                 QPointF(x + direction * 6, 89)});
     }
     if (hasFocus()) {
-        p.setPen(QPen(QColor("#e0a7ce"), 1));
+        p.setPen(QPen(theme::color(theme::accent), 1));
         p.drawLine(QPointF(left, height() - 2), QPointF(right, height() - 2));
     }
 }

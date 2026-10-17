@@ -20,6 +20,7 @@ def main():
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--reference-spk", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
+    parser.add_argument("--all-planets", action="store_true", help="Include all HPOP planetary targets")
     args = parser.parse_args()
     if importlib.metadata.version("jplephem") != "2.24" or np.__version__ != "2.2.6":
         raise ValueError("Reference environment must use jplephem 2.24 and NumPy 2.2.6")
@@ -36,6 +37,8 @@ def main():
     midnight = of.make_builtin_time_provider().from_utc(of.UtcDateTime(2017, 1, 1)).tai_nanoseconds
     ticks.update(midnight + offset for offset in (-2_000_000_000, -1_000_000_000, -500_000_000, -1, 0, 1, 500_000_000, 1_000_000_000))
     pairs = [(10, 399), (301, 399), (399, 0), (3, 0), (10, 301), (399, 301)]
+    if args.all_planets:
+        pairs += [(target, 399) for target in (199, 299, 4, 5, 6, 7, 8, 9)]
     max_position = max_velocity = max_time_roundtrip = 0.0
     rows = []
     with SPK.open(str(args.reference_spk)) as reference:
@@ -47,8 +50,10 @@ def main():
                 return np.concatenate((p*1000, v_per_day*(1000/86400)))
             if body == 0:
                 return np.zeros(6)
-            if body in (3, 10):
+            if 1 <= body <= 10:
                 return segment(0, body)
+            if body in (199, 299):
+                return segment(0, body // 100) + segment(body // 100, body)
             return segment(0, 3) + segment(3, body)
         for ns in sorted(ticks):
             epoch = of.Epoch(ns)
